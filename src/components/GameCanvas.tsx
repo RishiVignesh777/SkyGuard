@@ -4,38 +4,83 @@ import {
   clampPlayerPosition,
   computeAimAngle,
   createInitialPlayerState,
+  createParticlePool,
+  createStageWaveState,
   DEFAULT_AIM_ANGLE,
   generateCitySkyline,
   generateClouds,
   getStationaryHeroGeometry,
+  resolveCombatCollisions,
   screenToCanvasCoords,
+  spawnBurstParticles,
   stepAmbientWorld,
+  stepEnemies,
+  stepEnemySpawning,
+  stepParticles,
   stepPlayerMovement,
   stepProjectiles,
   stepShooting,
+  stepStageProgression,
 } from '../game/engine';
 import { renderSkyguardScene, renderStaticBackdrop } from '../game/renderer';
 import type {
   CloudSpec,
+  GameOutcome,
   GameState,
   MovementInput,
   PlayerState,
   Projectile,
+  RusherEnemy,
+  StageWaveState,
 } from '../game/types';
 
 interface GameCanvasProps {
   gameState: GameState;
+  runId: number;
+  onLivesChange: (lives: number) => void;
+  onStageChange: (stage: number) => void;
+  onStageClearedBannerChange: (clearedStage: number | null) => void;
+  onRunEnd: (outcome: GameOutcome, stageReached: number, defeated: number) => void;
 }
 
-export function GameCanvas({ gameState }: GameCanvasProps) {
+export function GameCanvas({
+  gameState,
+  runId,
+  onLivesChange,
+  onStageChange,
+  onStageClearedBannerChange,
+  onRunEnd,
+}: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const gameStateRef = useRef<GameState>(gameState);
   const prevGameStateRef = useRef<GameState>(gameState);
+  const runIdRef = useRef<number>(runId);
+  const prevRunIdRef = useRef<number>(runId);
+
+  const callbacksRef = useRef({
+    onLivesChange,
+    onStageChange,
+    onStageClearedBannerChange,
+    onRunEnd,
+  });
 
   useEffect(() => {
     gameStateRef.current = gameState;
   }, [gameState]);
+
+  useEffect(() => {
+    runIdRef.current = runId;
+  }, [runId]);
+
+  useEffect(() => {
+    callbacksRef.current = {
+      onLivesChange,
+      onStageChange,
+      onStageClearedBannerChange,
+      onRunEnd,
+    };
+  }, [onLivesChange, onStageChange, onStageClearedBannerChange, onRunEnd]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -64,6 +109,15 @@ export function GameCanvas({ gameState }: GameCanvasProps) {
 
     let player: PlayerState = createInitialPlayerState(width, height);
     const projectiles: Projectile[] = [];
+    const enemies: RusherEnemy[] = [];
+    const particles = createParticlePool(96);
+    const particleCursorRef = { current: 0 };
+    const nextEnemyIdRef = { current: 1 };
+    let wave: StageWaveState = createStageWaveState(1);
+    let enemiesDefeated = 0;
+    let lastReportedLives = player.lives;
+    let lastReportedStage = wave.stage;
+    let lastReportedBanner: number | null = null;
 
     const keysHeld = new Set<string>();
     let mouseDown = false;
@@ -76,12 +130,39 @@ export function GameCanvas({ gameState }: GameCanvasProps) {
       mouseDown = false;
     };
 
+    const resetRunSimulation = () => {
+      player = createInitialPlayerState(width, height);
+      projectiles.length = 0;
+      enemies.length = 0;
+      for (let i = 0; i < particles.length; i += 1) {
+        particles[i].active = false;
+      }
+      wave = createStageWaveState(1);
+      enemiesDefeated = 0;
+      clearHeldInputs();
+
+      if (lastReportedLives !== player.lives) {
+        lastReportedLives = player.lives;
+        callbacksRef.current.onLivesChange(player.lives);
+      }
+      if (lastReportedStage !== wave.stage) {
+        lastReportedStage = wave.stage;
+        callbacksRef.current.onStageChange(wave.stage);
+      }
+      if (lastReportedBanner !== null) {
+        lastReportedBanner = null;
+        callbacksRef.current.onStageClearedBannerChange(null);
+      }
+    };
+
     const readMovementInput = (): MovementInput => ({
       up: keysHeld.has('KeyW') || keysHeld.has('ArrowUp'),
       down: keysHeld.has('KeyS') || keysHeld.has('ArrowDown'),
       left: keysHeld.has('KeyA') || keysHeld.has('ArrowLeft'),
       right: keysHeld.has('KeyD') || keysHeld.has('ArrowRight'),
     });
+
+    let needsRender = true;
 
     const resizeCanvas = () => {
       width = Math.max(320, container.clientWidth);
@@ -113,6 +194,7 @@ export function GameCanvas({ gameState }: GameCanvasProps) {
       } else {
         clampPlayerPosition(player, width, height);
       }
+      needsRender = true;
     };
 
     resizeCanvas();
@@ -199,24 +281,41 @@ export function GameCanvas({ gameState }: GameCanvasProps) {
 
       const currentState = gameStateRef.current;
       const prevState = prevGameStateRef.current;
+      const currentRunId = runIdRef.current;
+
+      if (currentRunId !== prevRunIdRef.current) {
+        prevRunIdRef.current = currentRunId;
+        resetRunSimulation();
+        needsRender = true;
+      }
 
       if (currentState !== prevState) {
         if (currentState === 'title') {
-          player = createInitialPlayerState(width, height);
-          projectiles.length = 0;
-          clearHeldInputs();
-        } else if (currentState === 'paused') {
+          resetRunSimulation();
+        } else if (currentState === 'paused' || currentState === 'gameover') {
           clearHeldInputs();
         } else if (currentState === 'playing' && prevState === 'title') {
-          player = createInitialPlayerState(width, height);
-          projectiles.length = 0;
-          clearHeldInputs();
+          resetRunSimulation();
         }
         prevGameStateRef.current = currentState;
+        needsRender = true;
       }
 
-      if (currentState !== 'paused') {
+      let hasActiveParticles = false;
+      for (let i = 0; i < particles.length; i += 1) {
+        if (particles[i].active) {
+          hasActiveParticles = true;
+          break;
+        }
+      }
+
+      if (currentState === 'title' || currentState === 'playing') {
         elapsedTime = stepAmbientWorld(elapsedTime, dt, clouds, width);
+        stepParticles(particles, dt);
+        needsRender = true;
+      } else if (currentState === 'gameover' && hasActiveParticles) {
+        stepParticles(particles, dt);
+        needsRender = true;
       }
 
       if (currentState === 'playing') {
@@ -236,28 +335,96 @@ export function GameCanvas({ gameState }: GameCanvasProps) {
 
         stepShooting(player, mouseDown, dt, projectiles);
         stepProjectiles(projectiles, dt, width, height);
+
+        stepEnemySpawning(
+          wave,
+          enemies,
+          dt,
+          width,
+          height,
+          nextEnemyIdRef,
+          player.x,
+          player.y
+        );
+        stepEnemies(enemies, player.x, player.y, dt);
+
+        const combat = resolveCombatCollisions(
+          player,
+          projectiles,
+          enemies,
+          (px, py, color) =>
+            spawnBurstParticles(particles, particleCursorRef, px, py, color, 10)
+        );
+        enemiesDefeated += combat.enemiesDestroyed;
+
+        if (player.lives !== lastReportedLives) {
+          lastReportedLives = player.lives;
+          callbacksRef.current.onLivesChange(player.lives);
+        }
+
+        if (combat.gameOver) {
+          clearHeldInputs();
+          if (lastReportedBanner !== null) {
+            lastReportedBanner = null;
+            callbacksRef.current.onStageClearedBannerChange(null);
+          }
+          callbacksRef.current.onRunEnd('defeat', wave.stage, enemiesDefeated);
+        } else {
+          const stageEvent = stepStageProgression(wave, enemies, dt);
+          if (stageEvent.type === 'stage_cleared') {
+            lastReportedBanner = stageEvent.clearedStage;
+            callbacksRef.current.onStageClearedBannerChange(
+              stageEvent.clearedStage
+            );
+          } else if (stageEvent.type === 'stage_started') {
+            lastReportedBanner = null;
+            callbacksRef.current.onStageClearedBannerChange(null);
+            if (lastReportedStage !== stageEvent.nextStage) {
+              lastReportedStage = stageEvent.nextStage;
+              callbacksRef.current.onStageChange(stageEvent.nextStage);
+            }
+          } else if (stageEvent.type === 'all_stages_cleared') {
+            clearHeldInputs();
+            lastReportedBanner = null;
+            callbacksRef.current.onStageClearedBannerChange(null);
+            callbacksRef.current.onRunEnd('victory', wave.stage, enemiesDefeated);
+          }
+        }
       }
 
       const heroXStr = String(Math.round(player.x));
       const heroYStr = String(Math.round(player.y));
       const aimStr = player.aimAngle.toFixed(2);
       const projStr = String(projectiles.length);
+      const enemyStr = String(enemies.length);
+      const queueStr = String(wave.spawnQueueRemaining);
+      const livesStr = String(player.lives);
+      const stageStr = String(wave.stage);
 
       if (canvas.dataset.heroX !== heroXStr) canvas.dataset.heroX = heroXStr;
       if (canvas.dataset.heroY !== heroYStr) canvas.dataset.heroY = heroYStr;
       if (canvas.dataset.aimAngle !== aimStr) canvas.dataset.aimAngle = aimStr;
       if (canvas.dataset.projectiles !== projStr) canvas.dataset.projectiles = projStr;
+      if (canvas.dataset.enemies !== enemyStr) canvas.dataset.enemies = enemyStr;
+      if (canvas.dataset.spawnQueue !== queueStr) canvas.dataset.spawnQueue = queueStr;
+      if (canvas.dataset.lives !== livesStr) canvas.dataset.lives = livesStr;
+      if (canvas.dataset.stage !== stageStr) canvas.dataset.stage = stageStr;
 
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      renderSkyguardScene(ctx, {
-        width,
-        height,
-        elapsedTime,
-        clouds,
-        backdropCanvas,
-        player,
-        projectiles,
-      });
+      if (needsRender) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        renderSkyguardScene(ctx, {
+          width,
+          height,
+          elapsedTime,
+          clouds,
+          backdropCanvas,
+          player,
+          projectiles,
+          enemies,
+          particles,
+        });
+        needsRender = false;
+      }
 
       animationFrameId = window.requestAnimationFrame(tick);
     };

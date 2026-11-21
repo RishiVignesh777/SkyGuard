@@ -1,4 +1,5 @@
 import type {
+  BurstParticle,
   CloudSpec,
   GameHudSnapshot,
   GameState,
@@ -6,7 +7,9 @@ import type {
   MovementInput,
   PlayerState,
   Projectile,
+  RusherEnemy,
   SkylineBuilding,
+  StageWaveState,
 } from './types';
 
 export const MAX_DELTA_TIME_SEC = 0.05;
@@ -20,7 +23,20 @@ export const SHOT_COOLDOWN_SEC = 0.14;
 export const PROJECTILE_SPEED = 780;
 export const PROJECTILE_RADIUS = 6;
 
-export type GameAction = 'START' | 'PAUSE' | 'RESUME' | 'RETURN_TITLE';
+export const STAGE_RUSHER_COUNTS = [4, 5, 5, 6, 7] as const;
+export const RUSHER_RADIUS = 20;
+export const RUSHER_BASE_SPEED = 148;
+export const RUSHER_SPEED_PER_STAGE = 14;
+export const PLAYER_INVULN_SEC = 1.4;
+export const STAGE_CLEAR_BANNER_SEC = 1.8;
+
+export type GameAction =
+  | 'START'
+  | 'PAUSE'
+  | 'RESUME'
+  | 'GAME_OVER'
+  | 'RESTART'
+  | 'RETURN_TITLE';
 
 export function clampDeltaTime(rawDeltaMs: number): number {
   if (!Number.isFinite(rawDeltaMs) || rawDeltaMs <= 0) {
@@ -51,6 +67,10 @@ export function transitionGameState(
       return current === 'playing' ? 'paused' : current;
     case 'RESUME':
       return current === 'paused' ? 'playing' : current;
+    case 'GAME_OVER':
+      return current === 'playing' ? 'gameover' : current;
+    case 'RESTART':
+      return 'playing';
     case 'RETURN_TITLE':
       return 'title';
   }
@@ -83,7 +103,286 @@ export function createInitialPlayerState(
     radius: hero.radius,
     aimAngle: DEFAULT_AIM_ANGLE,
     shootCooldown: 0,
+    lives: DEFAULT_LIVES,
+    maxLives: DEFAULT_LIVES,
+    invulnTimer: 0,
   };
+}
+
+export function createStageWaveState(stage: number): StageWaveState {
+  const clampedStage = Math.max(1, Math.min(TOTAL_STAGES, stage));
+  const count = STAGE_RUSHER_COUNTS[clampedStage - 1];
+  const spawnInterval = Math.max(0.75, 1.15 - (clampedStage - 1) * 0.09);
+
+  return {
+    stage: clampedStage,
+    spawnQueueRemaining: count,
+    spawnTimer: 0.75,
+    spawnInterval,
+    stageClearTimer: 0,
+    clearedBannerStage: null,
+  };
+}
+
+export function getRusherSpeedForStage(stage: number): number {
+  const clampedStage = Math.max(1, Math.min(TOTAL_STAGES, stage));
+  return RUSHER_BASE_SPEED + (clampedStage - 1) * RUSHER_SPEED_PER_STAGE;
+}
+
+export function pickEdgeSpawnPoint(
+  viewportWidth: number,
+  viewportHeight: number,
+  radius: number,
+  rng: () => number = Math.random
+): { x: number; y: number } {
+  const width = Math.max(320, viewportWidth);
+  const height = Math.max(320, viewportHeight);
+  const offset = radius + 6;
+  const edge = Math.floor(rng() * 4);
+  const t = rng();
+
+  switch (edge) {
+    case 0: // Top edge
+      return { x: t * width, y: -offset };
+    case 1: // Right edge
+      return { x: width + offset, y: t * height };
+    case 2: // Bottom edge
+      return { x: t * width, y: height + offset };
+    default: // Left edge
+      return { x: -offset, y: t * height };
+  }
+}
+
+export function stepEnemySpawning(
+  wave: StageWaveState,
+  enemies: RusherEnemy[],
+  dt: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  nextIdRef: { current: number },
+  playerX: number,
+  playerY: number,
+  rng: () => number = Math.random
+): boolean {
+  if (wave.clearedBannerStage !== null || wave.spawnQueueRemaining <= 0) {
+    return false;
+  }
+
+  wave.spawnTimer -= dt;
+  if (wave.spawnTimer > 0) {
+    return false;
+  }
+
+  const spawnPos = pickEdgeSpawnPoint(
+    viewportWidth,
+    viewportHeight,
+    RUSHER_RADIUS,
+    rng
+  );
+  const angle = Math.atan2(playerY - spawnPos.y, playerX - spawnPos.x);
+
+  enemies.push({
+    id: nextIdRef.current,
+    x: spawnPos.x,
+    y: spawnPos.y,
+    radius: RUSHER_RADIUS,
+    speed: getRusherSpeedForStage(wave.stage),
+    angle,
+    wobblePhase: rng() * Math.PI * 2,
+  });
+  nextIdRef.current += 1;
+
+  wave.spawnQueueRemaining -= 1;
+  wave.spawnTimer = wave.spawnInterval;
+  return true;
+}
+
+export function stepEnemies(
+  enemies: RusherEnemy[],
+  playerX: number,
+  playerY: number,
+  dt: number
+): void {
+  for (let i = 0; i < enemies.length; i += 1) {
+    const enemy = enemies[i];
+    const dx = playerX - enemy.x;
+    const dy = playerY - enemy.y;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > 0.001) {
+      enemy.angle = Math.atan2(dy, dx);
+      const step = Math.min(dist, enemy.speed * dt);
+      enemy.x += (dx / dist) * step;
+      enemy.y += (dy / dist) * step;
+    }
+
+    enemy.wobblePhase += dt * 7.5;
+  }
+}
+
+export interface CollisionOutcome {
+  enemiesDestroyed: number;
+  playerHit: boolean;
+  gameOver: boolean;
+}
+
+export function resolveCombatCollisions(
+  player: PlayerState,
+  projectiles: Projectile[],
+  enemies: RusherEnemy[],
+  onPopEffect?: (x: number, y: number, color: string) => void
+): CollisionOutcome {
+  let enemiesDestroyed = 0;
+  let playerHit = false;
+
+  // 1. Projectile vs Enemy collisions
+  for (let ei = enemies.length - 1; ei >= 0; ei -= 1) {
+    const enemy = enemies[ei];
+    let destroyed = false;
+
+    for (let pi = projectiles.length - 1; pi >= 0; pi -= 1) {
+      const proj = projectiles[pi];
+      const dx = proj.x - enemy.x;
+      const dy = proj.y - enemy.y;
+      const hitDist = proj.radius + enemy.radius;
+
+      if (dx * dx + dy * dy <= hitDist * hitDist) {
+        projectiles.splice(pi, 1);
+        enemies.splice(ei, 1);
+        enemiesDestroyed += 1;
+        destroyed = true;
+        onPopEffect?.(enemy.x, enemy.y, '#A855F7');
+        break;
+      }
+    }
+
+    if (destroyed) {
+      continue;
+    }
+
+    // 2. Enemy vs Player collision
+    const pdx = player.x - enemy.x;
+    const pdy = player.y - enemy.y;
+    const playerHitDist = player.radius + enemy.radius - 3;
+
+    if (pdx * pdx + pdy * pdy <= playerHitDist * playerHitDist) {
+      if (player.invulnTimer <= 0) {
+        player.lives = Math.max(0, player.lives - 1);
+        player.invulnTimer = PLAYER_INVULN_SEC;
+        playerHit = true;
+        enemies.splice(ei, 1);
+        onPopEffect?.(enemy.x, enemy.y, '#EF4444');
+      }
+    }
+  }
+
+  return {
+    enemiesDestroyed,
+    playerHit,
+    gameOver: player.lives <= 0,
+  };
+}
+
+export type StageStepEvent =
+  | { type: 'none' }
+  | { type: 'stage_cleared'; clearedStage: number }
+  | { type: 'stage_started'; nextStage: number }
+  | { type: 'all_stages_cleared' };
+
+export function stepStageProgression(
+  wave: StageWaveState,
+  enemies: RusherEnemy[],
+  dt: number
+): StageStepEvent {
+  if (wave.clearedBannerStage !== null) {
+    wave.stageClearTimer -= dt;
+    if (wave.stageClearTimer <= 0) {
+      if (wave.clearedBannerStage >= TOTAL_STAGES) {
+        wave.clearedBannerStage = null;
+        return { type: 'all_stages_cleared' };
+      }
+      const nextStage = wave.clearedBannerStage + 1;
+      const nextWave = createStageWaveState(nextStage);
+      wave.stage = nextWave.stage;
+      wave.spawnQueueRemaining = nextWave.spawnQueueRemaining;
+      wave.spawnTimer = nextWave.spawnTimer;
+      wave.spawnInterval = nextWave.spawnInterval;
+      wave.stageClearTimer = 0;
+      wave.clearedBannerStage = null;
+      return { type: 'stage_started', nextStage };
+    }
+    return { type: 'none' };
+  }
+
+  if (wave.spawnQueueRemaining === 0 && enemies.length === 0) {
+    wave.clearedBannerStage = wave.stage;
+    wave.stageClearTimer = STAGE_CLEAR_BANNER_SEC;
+    return { type: 'stage_cleared', clearedStage: wave.stage };
+  }
+
+  return { type: 'none' };
+}
+
+export function createParticlePool(capacity = 96): BurstParticle[] {
+  const pool: BurstParticle[] = [];
+  for (let i = 0; i < capacity; i += 1) {
+    pool.push({
+      active: false,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      radius: 4,
+      life: 0,
+      maxLife: 0.35,
+      color: '#A855F7',
+    });
+  }
+  return pool;
+}
+
+export function spawnBurstParticles(
+  pool: BurstParticle[],
+  cursorRef: { current: number },
+  x: number,
+  y: number,
+  color: string,
+  count = 10
+): void {
+  for (let i = 0; i < count; i += 1) {
+    const idx = cursorRef.current % pool.length;
+    cursorRef.current = (cursorRef.current + 1) % pool.length;
+    const angle = (i / count) * Math.PI * 2 + (i % 2) * 0.2;
+    const speed = 90 + (i % 3) * 55;
+    const p = pool[idx];
+    p.active = true;
+    p.x = x;
+    p.y = y;
+    p.vx = Math.cos(angle) * speed;
+    p.vy = Math.sin(angle) * speed;
+    p.radius = 4 + (i % 3) * 1.5;
+    p.life = 0.32;
+    p.maxLife = 0.32;
+    p.color = color;
+  }
+}
+
+export function stepParticles(pool: BurstParticle[], dt: number): void {
+  for (let i = 0; i < pool.length; i += 1) {
+    const p = pool[i];
+    if (!p.active) {
+      continue;
+    }
+    p.life -= dt;
+    if (p.life <= 0) {
+      p.active = false;
+      continue;
+    }
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vx *= Math.pow(0.15, dt);
+    p.vy *= Math.pow(0.15, dt);
+  }
 }
 
 export function clampPlayerPosition(
@@ -116,6 +415,10 @@ export function stepPlayerMovement(
   viewportWidth: number,
   viewportHeight: number
 ): void {
+  if (player.invulnTimer > 0) {
+    player.invulnTimer = Math.max(0, player.invulnTimer - dt);
+  }
+
   let dx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
   let dy = (input.down ? 1 : 0) - (input.up ? 1 : 0);
 

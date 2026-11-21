@@ -1,4 +1,6 @@
-export type GameState = 'title' | 'playing' | 'paused';
+export type GameState = 'title' | 'playing' | 'paused' | 'gameover';
+
+export type GameOutcome = 'defeat' | 'victory';
 
 export type ShieldStatus = 'READY' | 'ACTIVE' | 'COOLDOWN';
 
@@ -41,6 +43,9 @@ export interface PlayerState {
   radius: number;
   aimAngle: number;
   shootCooldown: number;
+  lives: number;
+  maxLives: number;
+  invulnTimer: number;
 }
 
 export interface MovementInput {
@@ -57,4 +62,35 @@ export interface Projectile {
   vy: number;
   radius: number;
   angle: number;
+}
+
+export interface RusherEnemy {
+  id: number;
+  x: number;
+  y: number;
+  radius: number;
+  speed: number;
+  angle: number;
+  wobblePhase: number;
+}
+
+export interface BurstParticle {
+  active: boolean;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  life: number;
+  maxLife: number;
+  color: string;
+}
+
+export interface StageWaveState {
+  stage: number;
+  spawnQueueRemaining: number;
+  spawnTimer: number;
+  spawnInterval: number;
+  stageClearTimer: number;
+  clearedBannerStage: number | null;
 }

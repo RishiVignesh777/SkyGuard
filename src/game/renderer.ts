@@ -1,5 +1,12 @@
 import { DEFAULT_AIM_ANGLE } from './engine';
-import type { CloudSpec, PlayerState, Projectile, SkylineBuilding } from './types';
+import type {
+  BurstParticle,
+  CloudSpec,
+  PlayerState,
+  Projectile,
+  RusherEnemy,
+  SkylineBuilding,
+} from './types';
 
 export interface StaticBackdropParams {
   width: number;
@@ -15,6 +22,8 @@ export interface DynamicSceneParams {
   backdropCanvas: HTMLCanvasElement;
   player: PlayerState;
   projectiles: Projectile[];
+  enemies: RusherEnemy[];
+  particles: BurstParticle[];
 }
 
 export function renderStaticBackdrop(
@@ -38,11 +47,15 @@ export function renderSkyguardScene(
     backdropCanvas,
     player,
     projectiles,
+    enemies,
+    particles,
   } = params;
 
   ctx.drawImage(backdropCanvas, 0, 0, width, height);
   drawClouds(ctx, clouds);
+  drawParticles(ctx, particles);
   drawProjectiles(ctx, projectiles);
+  drawRushers(ctx, enemies);
   drawHero(ctx, player, elapsedTime);
 }
 
@@ -60,7 +73,6 @@ function drawSkyBackground(
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
 
-  // Soft cartoon sun glow in the upper right sky
   const sunX = width * 0.84;
   const sunY = height * 0.17;
   const sunRadius = Math.max(46, Math.min(width, height) * 0.075);
@@ -211,6 +223,89 @@ function drawCitySkyline(
   ctx.fillRect(0, height - 6, width, 6);
 }
 
+function drawParticles(
+  ctx: CanvasRenderingContext2D,
+  particles: BurstParticle[]
+): void {
+  for (let i = 0; i < particles.length; i += 1) {
+    const p = particles[i];
+    if (!p.active) {
+      continue;
+    }
+
+    const alpha = Math.max(0, p.life / p.maxLife);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius * (0.45 + alpha * 0.65), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawRushers(ctx: CanvasRenderingContext2D, enemies: RusherEnemy[]): void {
+  for (let i = 0; i < enemies.length; i += 1) {
+    const e = enemies[i];
+    const squishX = 1 + Math.sin(e.wobblePhase) * 0.12;
+    const squishY = 1 - Math.sin(e.wobblePhase) * 0.1;
+
+    ctx.save();
+    ctx.translate(e.x, e.y);
+
+    // Shadow under floating purple blob
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+    ctx.beginPath();
+    ctx.ellipse(0, e.radius * 1.15, e.radius * 0.85, e.radius * 0.24, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.rotate(e.angle - DEFAULT_AIM_ANGLE);
+    ctx.scale(squishX, squishY);
+
+    // Organic purple blob silhouette
+    const r = e.radius;
+    ctx.fillStyle = '#9333EA';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, -r);
+    ctx.bezierCurveTo(r * 0.95, -r * 0.95, r * 1.15, -r * 0.1, r * 0.95, r * 0.65);
+    ctx.bezierCurveTo(r * 0.72, r * 1.1, r * 0.22, r * 0.92, 0, r * 1.04);
+    ctx.bezierCurveTo(-r * 0.22, r * 0.92, -r * 0.72, r * 1.1, -r * 0.95, r * 0.65);
+    ctx.bezierCurveTo(-r * 1.15, -r * 0.1, -r * 0.95, -r * 0.95, 0, -r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Lighter purple top highlight
+    ctx.fillStyle = '#C084FC';
+    ctx.beginPath();
+    ctx.ellipse(-r * 0.25, -r * 0.35, r * 0.42, r * 0.24, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Angry cartoon eyes facing player
+    ctx.fillStyle = '#FEF08A';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(-r * 0.3, -r * 0.38, r * 0.2, 0, Math.PI * 2);
+    ctx.arc(r * 0.3, -r * 0.38, r * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#0F172A';
+    ctx.beginPath();
+    ctx.arc(-r * 0.28, -r * 0.44, r * 0.08, 0, Math.PI * 2);
+    ctx.arc(r * 0.28, -r * 0.44, r * 0.08, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
 function drawProjectiles(
   ctx: CanvasRenderingContext2D,
   projectiles: Projectile[]
@@ -222,13 +317,11 @@ function drawProjectiles(
     ctx.translate(p.x, p.y);
     ctx.rotate(p.angle);
 
-    // Outer cartoon energy halo
     ctx.fillStyle = 'rgba(250, 204, 21, 0.36)';
     ctx.beginPath();
     ctx.ellipse(-2, 0, p.radius * 2.1, p.radius * 1.45, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Elongated energy bolt with bold cartoon outline
     ctx.fillStyle = '#FACC15';
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 2.2;
@@ -237,7 +330,6 @@ function drawProjectiles(
     ctx.fill();
     ctx.stroke();
 
-    // Bright white-gold core
     ctx.fillStyle = '#FEF9C3';
     ctx.beginPath();
     ctx.ellipse(1.5, 0, p.radius * 0.78, p.radius * 0.44, 0, 0, Math.PI * 2);
@@ -252,25 +344,29 @@ function drawHero(
   player: PlayerState,
   elapsedTime: number
 ): void {
-  const { x, y, radius, aimAngle } = player;
+  const { x, y, radius, aimAngle, invulnTimer } = player;
 
+  // Brief invulnerability flash after enemy contact
+  const isFlashingWhite =
+    invulnTimer > 0 && Math.floor(invulnTimer * 16) % 2 === 0;
   const flutter = Math.sin(elapsedTime * 5.2) * (radius * 0.14);
   const secondaryFlutter = Math.cos(elapsedTime * 3.8) * (radius * 0.08);
 
   ctx.save();
   ctx.translate(x, y);
+  if (invulnTimer > 0) {
+    ctx.globalAlpha = isFlashingWhite ? 0.48 : 0.92;
+  }
 
-  // Ground/air drop shadow (unrotated, slightly below hero)
   ctx.fillStyle = 'rgba(15, 23, 42, 0.16)';
   ctx.beginPath();
   ctx.ellipse(0, radius * 1.58, radius * 0.92, radius * 0.24, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Rotate hero sprite so visor faces aimAngle and cape trails behind
   ctx.rotate(aimAngle - DEFAULT_AIM_ANGLE);
 
-  // Red cartoon cape with heroic sweep
-  ctx.fillStyle = '#EF4444';
+  // Red cartoon cape
+  ctx.fillStyle = isFlashingWhite ? '#FCA5A5' : '#EF4444';
   ctx.strokeStyle = '#0F172A';
   ctx.lineWidth = 3;
   ctx.lineJoin = 'round';
@@ -300,8 +396,7 @@ function drawHero(
   ctx.fill();
   ctx.stroke();
 
-  // Inner cape fold shadow
-  ctx.fillStyle = '#B91C1C';
+  ctx.fillStyle = isFlashingWhite ? '#F87171' : '#B91C1C';
   ctx.beginPath();
   ctx.moveTo(-radius * 0.4, radius * 0.45);
   ctx.quadraticCurveTo(
@@ -321,7 +416,7 @@ function drawHero(
   ctx.fill();
 
   // Hero body: blue circle
-  ctx.fillStyle = '#2563EB';
+  ctx.fillStyle = isFlashingWhite ? '#E0F2FE' : '#2563EB';
   ctx.strokeStyle = '#0F172A';
   ctx.lineWidth = 3.2;
   ctx.beginPath();
@@ -329,19 +424,20 @@ function drawHero(
   ctx.fill();
   ctx.stroke();
 
-  // Top-left suit highlight
-  ctx.fillStyle = '#60A5FA';
-  ctx.beginPath();
-  ctx.arc(
-    -radius * 0.22,
-    -radius * 0.22,
-    radius * 0.62,
-    Math.PI * 0.9,
-    Math.PI * 1.85
-  );
-  ctx.fill();
+  if (!isFlashingWhite) {
+    ctx.fillStyle = '#60A5FA';
+    ctx.beginPath();
+    ctx.arc(
+      -radius * 0.22,
+      -radius * 0.22,
+      radius * 0.62,
+      Math.PI * 0.9,
+      Math.PI * 1.85
+    );
+    ctx.fill();
+  }
 
-  // Small white visor facing forward toward cursor
+  // Small white visor
   const visorW = radius * 0.96;
   const visorH = radius * 0.38;
   const visorX = -visorW * 0.5;
