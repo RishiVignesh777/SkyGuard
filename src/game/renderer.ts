@@ -1,5 +1,5 @@
-import { getStationaryHeroGeometry } from './engine';
-import type { CloudSpec, SkylineBuilding } from './types';
+import { DEFAULT_AIM_ANGLE } from './engine';
+import type { CloudSpec, PlayerState, Projectile, SkylineBuilding } from './types';
 
 export interface StaticBackdropParams {
   width: number;
@@ -13,6 +13,8 @@ export interface DynamicSceneParams {
   elapsedTime: number;
   clouds: CloudSpec[];
   backdropCanvas: HTMLCanvasElement;
+  player: PlayerState;
+  projectiles: Projectile[];
 }
 
 export function renderStaticBackdrop(
@@ -28,11 +30,20 @@ export function renderSkyguardScene(
   ctx: CanvasRenderingContext2D,
   params: DynamicSceneParams
 ): void {
-  const { width, height, elapsedTime, clouds, backdropCanvas } = params;
+  const {
+    width,
+    height,
+    elapsedTime,
+    clouds,
+    backdropCanvas,
+    player,
+    projectiles,
+  } = params;
 
   ctx.drawImage(backdropCanvas, 0, 0, width, height);
   drawClouds(ctx, clouds);
-  drawStationaryHero(ctx, width, height, elapsedTime);
+  drawProjectiles(ctx, projectiles);
+  drawHero(ctx, player, elapsedTime);
 }
 
 function drawSkyBackground(
@@ -85,7 +96,6 @@ function drawClouds(ctx: CanvasRenderingContext2D, clouds: CloudSpec[]): void {
     ctx.scale(cloud.scale, cloud.scale);
     ctx.globalAlpha = cloud.opacity;
 
-    // Soft sky shadow silhouette slightly offset downward
     ctx.fillStyle = '#BAE6FD';
     ctx.beginPath();
     ctx.arc(0, 6, 25, 0, Math.PI * 2);
@@ -95,7 +105,6 @@ function drawClouds(ctx: CanvasRenderingContext2D, clouds: CloudSpec[]): void {
     ctx.roundRect(-36, 10, 96, 17, 8);
     ctx.fill();
 
-    // Pure white fluffy cartoon cloud top
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
     ctx.arc(0, 0, 26, 0, Math.PI * 2);
@@ -202,14 +211,48 @@ function drawCitySkyline(
   ctx.fillRect(0, height - 6, width, 6);
 }
 
-function drawStationaryHero(
+function drawProjectiles(
   ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
+  projectiles: Projectile[]
+): void {
+  for (let i = 0; i < projectiles.length; i += 1) {
+    const p = projectiles[i];
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.angle);
+
+    // Outer cartoon energy halo
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.36)';
+    ctx.beginPath();
+    ctx.ellipse(-2, 0, p.radius * 2.1, p.radius * 1.45, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Elongated energy bolt with bold cartoon outline
+    ctx.fillStyle = '#FACC15';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, p.radius * 1.5, p.radius * 0.9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Bright white-gold core
+    ctx.fillStyle = '#FEF9C3';
+    ctx.beginPath();
+    ctx.ellipse(1.5, 0, p.radius * 0.78, p.radius * 0.44, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+function drawHero(
+  ctx: CanvasRenderingContext2D,
+  player: PlayerState,
   elapsedTime: number
 ): void {
-  const hero = getStationaryHeroGeometry(width, height);
-  const { x, y, radius } = hero;
+  const { x, y, radius, aimAngle } = player;
 
   const flutter = Math.sin(elapsedTime * 5.2) * (radius * 0.14);
   const secondaryFlutter = Math.cos(elapsedTime * 3.8) * (radius * 0.08);
@@ -217,10 +260,14 @@ function drawStationaryHero(
   ctx.save();
   ctx.translate(x, y);
 
+  // Ground/air drop shadow (unrotated, slightly below hero)
   ctx.fillStyle = 'rgba(15, 23, 42, 0.16)';
   ctx.beginPath();
   ctx.ellipse(0, radius * 1.58, radius * 0.92, radius * 0.24, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  // Rotate hero sprite so visor faces aimAngle and cape trails behind
+  ctx.rotate(aimAngle - DEFAULT_AIM_ANGLE);
 
   // Red cartoon cape with heroic sweep
   ctx.fillStyle = '#EF4444';
@@ -294,7 +341,7 @@ function drawStationaryHero(
   );
   ctx.fill();
 
-  // Small white visor
+  // Small white visor facing forward toward cursor
   const visorW = radius * 0.96;
   const visorH = radius * 0.38;
   const visorX = -visorW * 0.5;

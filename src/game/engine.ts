@@ -3,12 +3,22 @@ import type {
   GameHudSnapshot,
   GameState,
   HeroGeometry,
+  MovementInput,
+  PlayerState,
+  Projectile,
   SkylineBuilding,
 } from './types';
 
 export const MAX_DELTA_TIME_SEC = 0.05;
 export const DEFAULT_LIVES = 3;
 export const TOTAL_STAGES = 5;
+
+export const HERO_MOVE_SPEED = 360;
+export const HERO_EDGE_MARGIN = 18;
+export const DEFAULT_AIM_ANGLE = -Math.PI / 2;
+export const SHOT_COOLDOWN_SEC = 0.14;
+export const PROJECTILE_SPEED = 780;
+export const PROJECTILE_RADIUS = 6;
 
 export type GameAction = 'START' | 'PAUSE' | 'RESUME' | 'RETURN_TITLE';
 
@@ -59,6 +69,148 @@ export function getStationaryHeroGeometry(
     x: safeWidth * 0.5,
     y: safeHeight * 0.62,
     radius,
+  };
+}
+
+export function createInitialPlayerState(
+  viewportWidth: number,
+  viewportHeight: number
+): PlayerState {
+  const hero = getStationaryHeroGeometry(viewportWidth, viewportHeight);
+  return {
+    x: hero.x,
+    y: hero.y,
+    radius: hero.radius,
+    aimAngle: DEFAULT_AIM_ANGLE,
+    shootCooldown: 0,
+  };
+}
+
+export function clampPlayerPosition(
+  player: PlayerState,
+  viewportWidth: number,
+  viewportHeight: number
+): void {
+  const minX = player.radius + HERO_EDGE_MARGIN;
+  const maxX = Math.max(minX, viewportWidth - player.radius - HERO_EDGE_MARGIN);
+  const minY = player.radius + HERO_EDGE_MARGIN;
+  const maxY = Math.max(minY, viewportHeight - player.radius - HERO_EDGE_MARGIN);
+
+  if (player.x < minX) {
+    player.x = minX;
+  } else if (player.x > maxX) {
+    player.x = maxX;
+  }
+
+  if (player.y < minY) {
+    player.y = minY;
+  } else if (player.y > maxY) {
+    player.y = maxY;
+  }
+}
+
+export function stepPlayerMovement(
+  player: PlayerState,
+  input: MovementInput,
+  dt: number,
+  viewportWidth: number,
+  viewportHeight: number
+): void {
+  let dx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+  let dy = (input.down ? 1 : 0) - (input.up ? 1 : 0);
+
+  if (dx !== 0 || dy !== 0) {
+    const length = Math.hypot(dx, dy);
+    dx /= length;
+    dy /= length;
+
+    player.x += dx * HERO_MOVE_SPEED * dt;
+    player.y += dy * HERO_MOVE_SPEED * dt;
+  }
+
+  clampPlayerPosition(player, viewportWidth, viewportHeight);
+}
+
+export function computeAimAngle(
+  heroX: number,
+  heroY: number,
+  targetX: number,
+  targetY: number,
+  fallbackAngle = DEFAULT_AIM_ANGLE
+): number {
+  const dx = targetX - heroX;
+  const dy = targetY - heroY;
+  if (dx === 0 && dy === 0) {
+    return fallbackAngle;
+  }
+  return Math.atan2(dy, dx);
+}
+
+export function stepShooting(
+  player: PlayerState,
+  isFiring: boolean,
+  dt: number,
+  projectiles: Projectile[]
+): boolean {
+  player.shootCooldown = Math.max(0, player.shootCooldown - dt);
+
+  if (!isFiring || player.shootCooldown > 0) {
+    return false;
+  }
+
+  const spawnDistance = player.radius + PROJECTILE_RADIUS + 4;
+  const angle = player.aimAngle;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  projectiles.push({
+    x: player.x + cos * spawnDistance,
+    y: player.y + sin * spawnDistance,
+    vx: cos * PROJECTILE_SPEED,
+    vy: sin * PROJECTILE_SPEED,
+    radius: PROJECTILE_RADIUS,
+    angle,
+  });
+
+  player.shootCooldown = SHOT_COOLDOWN_SEC;
+  return true;
+}
+
+export function stepProjectiles(
+  projectiles: Projectile[],
+  dt: number,
+  viewportWidth: number,
+  viewportHeight: number
+): void {
+  for (let i = projectiles.length - 1; i >= 0; i -= 1) {
+    const p = projectiles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+
+    const cullMargin = p.radius + 8;
+    if (
+      p.x < -cullMargin ||
+      p.x > viewportWidth + cullMargin ||
+      p.y < -cullMargin ||
+      p.y > viewportHeight + cullMargin
+    ) {
+      projectiles.splice(i, 1);
+    }
+  }
+}
+
+export function screenToCanvasCoords(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  canvasWidth: number,
+  canvasHeight: number
+): { x: number; y: number } {
+  const safeRectW = rect.width > 0 ? rect.width : canvasWidth;
+  const safeRectH = rect.height > 0 ? rect.height : canvasHeight;
+  return {
+    x: ((clientX - rect.left) / safeRectW) * canvasWidth,
+    y: ((clientY - rect.top) / safeRectH) * canvasHeight,
   };
 }
 

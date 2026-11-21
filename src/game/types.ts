@@ -34,3 +34,27 @@ export interface HeroGeometry {
   y: number;
   radius: number;
 }
+
+export interface PlayerState {
+  x: number;
+  y: number;
+  radius: number;
+  aimAngle: number;
+  shootCooldown: number;
+}
+
+export interface MovementInput {
+  up: boolean;
+  down: boolean;
+  left: boolean;
+  right: boolean;
+}
+
+export interface Projectile {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  angle: number;
+}
