@@ -1,0 +1,6 @@
+{
+  "name": "SKYGUARD",
+  "description": "A colorful cartoon top-down superhero shooter set in a city.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
