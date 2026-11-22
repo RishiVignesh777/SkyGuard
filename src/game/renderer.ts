@@ -2,9 +2,10 @@ import { DEFAULT_AIM_ANGLE } from './engine';
 import type {
   BurstParticle,
   CloudSpec,
+  Enemy,
+  EnemyProjectile,
   PlayerState,
   Projectile,
-  RusherEnemy,
   SkylineBuilding,
 } from './types';
 
@@ -22,7 +23,8 @@ export interface DynamicSceneParams {
   backdropCanvas: HTMLCanvasElement;
   player: PlayerState;
   projectiles: Projectile[];
-  enemies: RusherEnemy[];
+  enemies: Enemy[];
+  enemyProjectiles: EnemyProjectile[];
   particles: BurstParticle[];
 }
 
@@ -48,6 +50,7 @@ export function renderSkyguardScene(
     player,
     projectiles,
     enemies,
+    enemyProjectiles,
     particles,
   } = params;
 
@@ -55,7 +58,8 @@ export function renderSkyguardScene(
   drawClouds(ctx, clouds);
   drawParticles(ctx, particles);
   drawProjectiles(ctx, projectiles);
-  drawRushers(ctx, enemies);
+  drawEnemyProjectiles(ctx, enemyProjectiles);
+  drawEnemies(ctx, enemies, elapsedTime);
   drawHero(ctx, player, elapsedTime);
 }
 
@@ -247,63 +251,191 @@ function drawParticles(
   }
 }
 
-function drawRushers(ctx: CanvasRenderingContext2D, enemies: RusherEnemy[]): void {
+function drawEnemies(
+  ctx: CanvasRenderingContext2D,
+  enemies: Enemy[],
+  elapsedTime: number
+): void {
   for (let i = 0; i < enemies.length; i += 1) {
     const e = enemies[i];
-    const squishX = 1 + Math.sin(e.wobblePhase) * 0.12;
-    const squishY = 1 - Math.sin(e.wobblePhase) * 0.1;
-
-    ctx.save();
-    ctx.translate(e.x, e.y);
-
-    // Shadow under floating purple blob
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
-    ctx.beginPath();
-    ctx.ellipse(0, e.radius * 1.15, e.radius * 0.85, e.radius * 0.24, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.rotate(e.angle - DEFAULT_AIM_ANGLE);
-    ctx.scale(squishX, squishY);
-
-    // Organic purple blob silhouette
-    const r = e.radius;
-    ctx.fillStyle = '#9333EA';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(0, -r);
-    ctx.bezierCurveTo(r * 0.95, -r * 0.95, r * 1.15, -r * 0.1, r * 0.95, r * 0.65);
-    ctx.bezierCurveTo(r * 0.72, r * 1.1, r * 0.22, r * 0.92, 0, r * 1.04);
-    ctx.bezierCurveTo(-r * 0.22, r * 0.92, -r * 0.72, r * 1.1, -r * 0.95, r * 0.65);
-    ctx.bezierCurveTo(-r * 1.15, -r * 0.1, -r * 0.95, -r * 0.95, 0, -r);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-
-    // Lighter purple top highlight
-    ctx.fillStyle = '#C084FC';
-    ctx.beginPath();
-    ctx.ellipse(-r * 0.25, -r * 0.35, r * 0.42, r * 0.24, -0.4, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Angry cartoon eyes facing player
-    ctx.fillStyle = '#FEF08A';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(-r * 0.3, -r * 0.38, r * 0.2, 0, Math.PI * 2);
-    ctx.arc(r * 0.3, -r * 0.38, r * 0.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#0F172A';
-    ctx.beginPath();
-    ctx.arc(-r * 0.28, -r * 0.44, r * 0.08, 0, Math.PI * 2);
-    ctx.arc(r * 0.28, -r * 0.44, r * 0.08, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
+    if (e.kind === 'blaster') {
+      drawBlaster(ctx, e);
+    } else if (e.kind === 'drone') {
+      drawDrone(ctx, e, elapsedTime);
+    } else {
+      drawRusher(ctx, e);
+    }
   }
+}
+
+function drawRusher(ctx: CanvasRenderingContext2D, e: Enemy): void {
+  const squishX = 1 + Math.sin(e.wobblePhase) * 0.12;
+  const squishY = 1 - Math.sin(e.wobblePhase) * 0.1;
+
+  ctx.save();
+  ctx.translate(e.x, e.y);
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+  ctx.beginPath();
+  ctx.ellipse(0, e.radius * 1.15, e.radius * 0.85, e.radius * 0.24, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.rotate(e.angle - DEFAULT_AIM_ANGLE);
+  ctx.scale(squishX, squishY);
+
+  const r = e.radius;
+  ctx.fillStyle = '#9333EA';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, -r);
+  ctx.bezierCurveTo(r * 0.95, -r * 0.95, r * 1.15, -r * 0.1, r * 0.95, r * 0.65);
+  ctx.bezierCurveTo(r * 0.72, r * 1.1, r * 0.22, r * 0.92, 0, r * 1.04);
+  ctx.bezierCurveTo(-r * 0.22, r * 0.92, -r * 0.72, r * 1.1, -r * 0.95, r * 0.65);
+  ctx.bezierCurveTo(-r * 1.15, -r * 0.1, -r * 0.95, -r * 0.95, 0, -r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#C084FC';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.25, -r * 0.35, r * 0.42, r * 0.24, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#FEF08A';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(-r * 0.3, -r * 0.38, r * 0.2, 0, Math.PI * 2);
+  ctx.arc(r * 0.3, -r * 0.38, r * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#0F172A';
+  ctx.beginPath();
+  ctx.arc(-r * 0.28, -r * 0.44, r * 0.08, 0, Math.PI * 2);
+  ctx.arc(r * 0.28, -r * 0.44, r * 0.08, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawBlaster(ctx: CanvasRenderingContext2D, e: Enemy): void {
+  const r = e.radius;
+  const isCharging = e.fireTimer <= 0.4;
+
+  ctx.save();
+  ctx.translate(e.x, e.y);
+
+  // Drop shadow
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+  ctx.beginPath();
+  ctx.ellipse(0, r * 1.25, r * 0.85, r * 0.24, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.rotate(e.angle - DEFAULT_AIM_ANGLE);
+
+  // Orange diamond-shaped chassis
+  ctx.fillStyle = '#F97316';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 3;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 1.15);
+  ctx.lineTo(r * 1.05, 0);
+  ctx.lineTo(0, r * 1.15);
+  ctx.lineTo(-r * 1.05, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Inner orange bevel highlight
+  ctx.fillStyle = '#FDBA74';
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 0.72);
+  ctx.lineTo(r * 0.56, 0);
+  ctx.lineTo(0, -r * 0.12);
+  ctx.lineTo(-r * 0.56, 0);
+  ctx.closePath();
+  ctx.fill();
+
+  // Aiming blaster core / telegraph glow
+  ctx.fillStyle = isCharging ? '#FEF08A' : '#FFFFFF';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.arc(0, -r * 0.18, r * (isCharging ? 0.34 : 0.26), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawDrone(
+  ctx: CanvasRenderingContext2D,
+  e: Enemy,
+  elapsedTime: number
+): void {
+  const r = e.radius;
+  const tilt = Math.sin(e.wobblePhase) * 0.18;
+  const isCharging = e.fireTimer <= 0.35;
+
+  ctx.save();
+  ctx.translate(e.x, e.y);
+
+  // Drop shadow
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+  ctx.beginPath();
+  ctx.ellipse(0, r * 1.12, r * 1.05, r * 0.24, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.rotate(tilt);
+
+  // Yellow flying saucer outer disc
+  ctx.fillStyle = '#FACC15';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.ellipse(0, r * 0.12, r * 1.25, r * 0.56, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Rim highlight
+  ctx.fillStyle = '#FEF08A';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.2, r * 0.02, r * 0.85, r * 0.22, -0.1, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Glass cockpit dome
+  ctx.fillStyle = isCharging ? '#FB7185' : '#38BDF8';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(0, -r * 0.06, r * 0.56, Math.PI, 0);
+  ctx.quadraticCurveTo(0, r * 0.22, -r * 0.56, -r * 0.06);
+  ctx.fill();
+  ctx.stroke();
+
+  // Dome sheen
+  ctx.fillStyle = '#E0F2FE';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.18, -r * 0.26, r * 0.18, r * 0.09, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Blinking saucer lights
+  const pulse = Math.floor(elapsedTime * 8) % 3;
+  for (let li = -1; li <= 1; li += 1) {
+    const active = li + 1 === pulse;
+    ctx.fillStyle = active ? '#FFFFFF' : '#EA580C';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(li * r * 0.55, r * 0.26, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  ctx.restore();
 }
 
 function drawProjectiles(
@@ -339,22 +471,60 @@ function drawProjectiles(
   }
 }
 
+function drawEnemyProjectiles(
+  ctx: CanvasRenderingContext2D,
+  enemyProjectiles: EnemyProjectile[]
+): void {
+  for (let i = 0; i < enemyProjectiles.length; i += 1) {
+    const p = enemyProjectiles[i];
+    const isDrone = p.kind === 'drone';
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+
+    // Outer hazard halo
+    ctx.fillStyle = isDrone
+      ? 'rgba(244, 63, 94, 0.35)'
+      : 'rgba(249, 115, 22, 0.35)';
+    ctx.beginPath();
+    ctx.arc(0, 0, p.radius * 1.85, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Solid projectile sphere with dark outline
+    ctx.fillStyle = isDrone ? '#FB7185' : '#F97316';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(-1.5, -1.5, p.radius * 0.38, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
 function drawHero(
   ctx: CanvasRenderingContext2D,
   player: PlayerState,
   elapsedTime: number
 ): void {
-  const { x, y, radius, aimAngle, invulnTimer } = player;
+  const { x, y, radius, aimAngle, invulnTimer, shieldTimer } = player;
 
-  // Brief invulnerability flash after enemy contact
   const isFlashingWhite =
-    invulnTimer > 0 && Math.floor(invulnTimer * 16) % 2 === 0;
+    shieldTimer <= 0 &&
+    invulnTimer > 0 &&
+    Math.floor(invulnTimer * 16) % 2 === 0;
   const flutter = Math.sin(elapsedTime * 5.2) * (radius * 0.14);
   const secondaryFlutter = Math.cos(elapsedTime * 3.8) * (radius * 0.08);
 
   ctx.save();
   ctx.translate(x, y);
-  if (invulnTimer > 0) {
+  if (shieldTimer <= 0 && invulnTimer > 0) {
     ctx.globalAlpha = isFlashingWhite ? 0.48 : 0.92;
   }
 
@@ -363,6 +533,7 @@ function drawHero(
   ctx.ellipse(0, radius * 1.58, radius * 0.92, radius * 0.24, 0, 0, Math.PI * 2);
   ctx.fill();
 
+  ctx.save();
   ctx.rotate(aimAngle - DEFAULT_AIM_ANGLE);
 
   // Red cartoon cape
@@ -461,6 +632,37 @@ function drawHero(
     2
   );
   ctx.fill();
+
+  ctx.restore();
+
+  // Glowing shield ring around the player when shield is active
+  if (shieldTimer > 0) {
+    const pulse = 1 + Math.sin(elapsedTime * 10) * 0.05;
+    const isEnding = shieldTimer < 0.7 && Math.floor(elapsedTime * 16) % 2 === 0;
+    const shieldRadius = (radius + 14) * pulse;
+
+    ctx.globalAlpha = isEnding ? 0.55 : 0.92;
+
+    // Soft glowing outer aura
+    ctx.strokeStyle = 'rgba(125, 211, 252, 0.55)';
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.arc(0, 0, shieldRadius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Translucent interior forcefield tint
+    ctx.fillStyle = 'rgba(56, 189, 248, 0.2)';
+    ctx.beginPath();
+    ctx.arc(0, 0, shieldRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Crisp bright glowing energy ring
+    ctx.strokeStyle = '#E0F2FE';
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, shieldRadius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   ctx.restore();
 }

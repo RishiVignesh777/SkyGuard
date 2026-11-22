@@ -30,7 +30,11 @@ function HeartIcon({ filled }: { filled: boolean }) {
   );
 }
 
-function ShieldIcon({ ready }: { ready: boolean }) {
+function ShieldIcon({ active, ready }: { active: boolean; ready: boolean }) {
+  const outerFill = active ? '#FACC15' : ready ? '#38BDF8' : '#64748B';
+  const innerFill = active ? '#FEF08A' : ready ? '#7DD3FC' : '#94A3B8';
+  const highlightFill = active ? '#FFFFFF' : ready ? '#E0F2FE' : '#CBD5E1';
+
   return (
     <svg
       viewBox="0 0 24 24"
@@ -39,18 +43,18 @@ function ShieldIcon({ ready }: { ready: boolean }) {
     >
       <path
         d="M12 3L19.5 6.2V11.8C19.5 16.4 16.3 20.1 12 21.5C7.7 20.1 4.5 16.4 4.5 11.8V6.2L12 3Z"
-        fill={ready ? '#38BDF8' : '#64748B'}
+        fill={outerFill}
         stroke="#0F172A"
         strokeWidth="2.2"
         strokeLinejoin="round"
       />
       <path
         d="M12 5.4L17.2 7.6V11.6C17.2 14.9 15 17.7 12 19C9 17.7 6.8 14.9 6.8 11.6V7.6L12 5.4Z"
-        fill={ready ? '#7DD3FC' : '#94A3B8'}
+        fill={innerFill}
       />
       <path
         d="M12 5.4V19C9 17.7 6.8 14.9 6.8 11.6V7.6L12 5.4Z"
-        fill={ready ? '#E0F2FE' : '#CBD5E1'}
+        fill={highlightFill}
         opacity="0.65"
       />
     </svg>
@@ -58,7 +62,24 @@ function ShieldIcon({ ready }: { ready: boolean }) {
 }
 
 export function TopHud({ hud }: TopHudProps) {
-  const isShieldReady = hud.shieldStatus === 'READY';
+  const isActive = hud.shieldStatus === 'ACTIVE';
+  const isReady = hud.shieldStatus === 'READY';
+
+  const formattedTime =
+    hud.shieldTimeRemaining >= 1
+      ? `${Math.round(hud.shieldTimeRemaining)}s`
+      : `${hud.shieldTimeRemaining.toFixed(1)}s`;
+  const shieldKicker = isActive
+    ? 'Shield On'
+    : isReady
+      ? 'Shield'
+      : 'Cooldown';
+  const shieldReadout = isReady ? 'READY' : formattedTime;
+  const shieldAria = isReady
+    ? 'Shield status: READY'
+    : isActive
+      ? `Shield active: ${formattedTime} remaining`
+      : `Shield cooldown: ${formattedTime} remaining`;
 
   return (
     <header
@@ -95,20 +116,24 @@ export function TopHud({ hud }: TopHudProps) {
         {/* Right: Shield status readout */}
         <div
           data-testid="hud-shield"
-          className="flex shrink-0 items-center justify-self-end gap-2 rounded-xl border-2 border-[#0F172A] bg-[#0F172A] px-2.5 py-1.5 shadow-[0_4px_0_rgba(15,23,42,0.45)] sm:gap-2.5 sm:px-3.5 sm:py-2"
-          aria-label={`Shield status: ${hud.shieldStatus}`}
+          className="flex min-w-[92px] shrink-0 items-center justify-self-end gap-2 rounded-xl border-2 border-[#0F172A] bg-[#0F172A] px-2.5 py-1.5 shadow-[0_4px_0_rgba(15,23,42,0.45)] sm:min-w-[116px] sm:gap-2.5 sm:px-3.5 sm:py-2"
+          aria-label={shieldAria}
         >
-          <ShieldIcon ready={isShieldReady} />
+          <ShieldIcon active={isActive} ready={isReady} />
           <div className="flex flex-col leading-none">
             <span className="text-[9px] font-bold tracking-wider text-sky-200 uppercase sm:text-[10px]">
-              Shield
+              {shieldKicker}
             </span>
             <span
               className={`font-display text-xs font-extrabold tracking-wide uppercase tabular-nums sm:text-base ${
-                isShieldReady ? 'text-sky-300' : 'text-slate-300'
+                isActive
+                  ? 'text-amber-300'
+                  : isReady
+                    ? 'text-sky-300'
+                    : 'text-slate-300'
               }`}
             >
-              {hud.shieldStatus}
+              {shieldReadout}
             </span>
           </div>
         </div>

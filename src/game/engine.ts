@@ -1,13 +1,16 @@
 import type {
   BurstParticle,
   CloudSpec,
+  Enemy,
+  EnemyKind,
+  EnemyProjectile,
   GameHudSnapshot,
   GameState,
   HeroGeometry,
   MovementInput,
   PlayerState,
   Projectile,
-  RusherEnemy,
+  ShieldStatus,
   SkylineBuilding,
   StageWaveState,
 } from './types';
@@ -23,12 +26,45 @@ export const SHOT_COOLDOWN_SEC = 0.14;
 export const PROJECTILE_SPEED = 780;
 export const PROJECTILE_RADIUS = 6;
 
-export const STAGE_RUSHER_COUNTS = [4, 5, 5, 6, 7] as const;
+export const SHIELD_DURATION_SEC = 3.0;
+export const SHIELD_COOLDOWN_SEC = 6.0;
+
 export const RUSHER_RADIUS = 20;
 export const RUSHER_BASE_SPEED = 148;
 export const RUSHER_SPEED_PER_STAGE = 14;
+
+export const BLASTER_RADIUS = 22;
+export const BLASTER_SPEED = 128;
+export const BLASTER_PREFERRED_MIN_DIST = 250;
+export const BLASTER_PREFERRED_MAX_DIST = 340;
+export const BLASTER_FIRE_INTERVAL = 2.2;
+export const BLASTER_PROJECTILE_SPEED = 240;
+
+export const DRONE_RADIUS = 20;
+export const DRONE_BASE_SPEED = 165;
+export const DRONE_SPEED_PER_STAGE = 12;
+export const DRONE_WAVE_AMPLITUDE = 135;
+export const DRONE_FIRE_INTERVAL = 2.5;
+export const DRONE_PROJECTILE_SPEED = 370;
+
+export const ENEMY_PROJECTILE_RADIUS = 6;
 export const PLAYER_INVULN_SEC = 1.4;
 export const STAGE_CLEAR_BANNER_SEC = 1.8;
+
+export interface StageComposition {
+  rushers: number;
+  blasters: number;
+  drones: number;
+  spawnInterval: number;
+}
+
+export const STAGE_COMPOSITIONS: readonly StageComposition[] = [
+  { rushers: 4, blasters: 0, drones: 0, spawnInterval: 1.15 },
+  { rushers: 4, blasters: 2, drones: 0, spawnInterval: 1.05 },
+  { rushers: 4, blasters: 2, drones: 2, spawnInterval: 0.95 },
+  { rushers: 5, blasters: 3, drones: 3, spawnInterval: 0.85 },
+  { rushers: 6, blasters: 4, drones: 4, spawnInterval: 0.75 },
+];
 
 export type GameAction =
   | 'START'
@@ -46,13 +82,15 @@ export function clampDeltaTime(rawDeltaMs: number): number {
   return Math.min(seconds, MAX_DELTA_TIME_SEC);
 }
 
-export function createInitialHudSnapshot(): GameHudSnapshot {
+export function createInitialHudSnapshot(initialStage = 1): GameHudSnapshot {
+  const safeStage = Math.max(1, Math.min(TOTAL_STAGES, initialStage));
   return {
     lives: DEFAULT_LIVES,
     maxLives: DEFAULT_LIVES,
-    stage: 1,
+    stage: safeStage,
     maxStages: TOTAL_STAGES,
     shieldStatus: 'READY',
+    shieldTimeRemaining: 0,
   };
 }
 
@@ -106,19 +144,95 @@ export function createInitialPlayerState(
     lives: DEFAULT_LIVES,
     maxLives: DEFAULT_LIVES,
     invulnTimer: 0,
+    shieldTimer: 0,
+    shieldCooldown: 0,
   };
 }
 
-export function createStageWaveState(stage: number): StageWaveState {
+export function activateShield(player: PlayerState): boolean {
+  if (player.shieldTimer > 0 || player.shieldCooldown > 0) {
+    return false;
+  }
+  player.shieldTimer = SHIELD_DURATION_SEC;
+  return true;
+}
+
+export function stepShieldState(player: PlayerState, dt: number): void {
+  if (player.shieldTimer > 0) {
+    player.shieldTimer = Math.max(0, player.shieldTimer - dt);
+    if (player.shieldTimer === 0) {
+      player.shieldCooldown = SHIELD_COOLDOWN_SEC;
+    }
+  } else if (player.shieldCooldown > 0) {
+    player.shieldCooldown = Math.max(0, player.shieldCooldown - dt);
+  }
+}
+
+export function getShieldSnapshot(player: PlayerState): {
+  status: ShieldStatus;
+  timeRemaining: number;
+} {
+  if (player.shieldTimer > 0) {
+    const t =
+      player.shieldTimer >= 1
+        ? Math.ceil(player.shieldTimer)
+        : Math.ceil(player.shieldTimer * 10) / 10;
+    return {
+      status: 'ACTIVE',
+      timeRemaining: t,
+    };
+  }
+  if (player.shieldCooldown > 0) {
+    const t =
+      player.shieldCooldown >= 1
+        ? Math.ceil(player.shieldCooldown)
+        : Math.ceil(player.shieldCooldown * 10) / 10;
+    return {
+      status: 'COOLDOWN',
+      timeRemaining: t,
+    };
+  }
+  return {
+    status: 'READY',
+    timeRemaining: 0,
+  };
+}
+
+export function buildStageSpawnQueue(
+  stage: number,
+  rng: () => number = Math.random
+): EnemyKind[] {
   const clampedStage = Math.max(1, Math.min(TOTAL_STAGES, stage));
-  const count = STAGE_RUSHER_COUNTS[clampedStage - 1];
-  const spawnInterval = Math.max(0.75, 1.15 - (clampedStage - 1) * 0.09);
+  const comp = STAGE_COMPOSITIONS[clampedStage - 1];
+  const queue: EnemyKind[] = [];
+
+  for (let i = 0; i < comp.rushers; i += 1) queue.push('rusher');
+  for (let i = 0; i < comp.blasters; i += 1) queue.push('blaster');
+  for (let i = 0; i < comp.drones; i += 1) queue.push('drone');
+
+  // Keep a rusher first so Stage 1+ opens cleanly, shuffle the rest
+  for (let i = queue.length - 1; i > 1; i -= 1) {
+    const j = 1 + Math.floor(rng() * i);
+    const tmp = queue[i];
+    queue[i] = queue[j];
+    queue[j] = tmp;
+  }
+
+  return queue;
+}
+
+export function createStageWaveState(
+  stage: number,
+  rng: () => number = Math.random
+): StageWaveState {
+  const clampedStage = Math.max(1, Math.min(TOTAL_STAGES, stage));
+  const comp = STAGE_COMPOSITIONS[clampedStage - 1];
 
   return {
     stage: clampedStage,
-    spawnQueueRemaining: count,
+    spawnQueue: buildStageSpawnQueue(clampedStage, rng),
     spawnTimer: 0.75,
-    spawnInterval,
+    spawnInterval: comp.spawnInterval,
     stageClearTimer: 0,
     clearedBannerStage: null,
   };
@@ -127,6 +241,11 @@ export function createStageWaveState(stage: number): StageWaveState {
 export function getRusherSpeedForStage(stage: number): number {
   const clampedStage = Math.max(1, Math.min(TOTAL_STAGES, stage));
   return RUSHER_BASE_SPEED + (clampedStage - 1) * RUSHER_SPEED_PER_STAGE;
+}
+
+export function getDroneSpeedForStage(stage: number): number {
+  const clampedStage = Math.max(1, Math.min(TOTAL_STAGES, stage));
+  return DRONE_BASE_SPEED + (clampedStage - 1) * DRONE_SPEED_PER_STAGE;
 }
 
 export function pickEdgeSpawnPoint(
@@ -142,20 +261,20 @@ export function pickEdgeSpawnPoint(
   const t = rng();
 
   switch (edge) {
-    case 0: // Top edge
+    case 0:
       return { x: t * width, y: -offset };
-    case 1: // Right edge
+    case 1:
       return { x: width + offset, y: t * height };
-    case 2: // Bottom edge
+    case 2:
       return { x: t * width, y: height + offset };
-    default: // Left edge
+    default:
       return { x: -offset, y: t * height };
   }
 }
 
 export function stepEnemySpawning(
   wave: StageWaveState,
-  enemies: RusherEnemy[],
+  enemies: Enemy[],
   dt: number,
   viewportWidth: number,
   viewportHeight: number,
@@ -164,7 +283,7 @@ export function stepEnemySpawning(
   playerY: number,
   rng: () => number = Math.random
 ): boolean {
-  if (wave.clearedBannerStage !== null || wave.spawnQueueRemaining <= 0) {
+  if (wave.clearedBannerStage !== null || wave.spawnQueue.length === 0) {
     return false;
   }
 
@@ -173,50 +292,166 @@ export function stepEnemySpawning(
     return false;
   }
 
-  const spawnPos = pickEdgeSpawnPoint(
-    viewportWidth,
-    viewportHeight,
-    RUSHER_RADIUS,
-    rng
-  );
+  const kind = wave.spawnQueue.shift()!;
+  const radius =
+    kind === 'blaster'
+      ? BLASTER_RADIUS
+      : kind === 'drone'
+        ? DRONE_RADIUS
+        : RUSHER_RADIUS;
+  const spawnPos = pickEdgeSpawnPoint(viewportWidth, viewportHeight, radius, rng);
   const angle = Math.atan2(playerY - spawnPos.y, playerX - spawnPos.x);
+
+  const speed =
+    kind === 'blaster'
+      ? BLASTER_SPEED
+      : kind === 'drone'
+        ? getDroneSpeedForStage(wave.stage)
+        : getRusherSpeedForStage(wave.stage);
+
+  const fireTimer =
+    kind === 'blaster'
+      ? 1.2 + rng() * 0.8
+      : kind === 'drone'
+        ? 1.5 + rng() * 0.9
+        : 999;
 
   enemies.push({
     id: nextIdRef.current,
+    kind,
     x: spawnPos.x,
     y: spawnPos.y,
-    radius: RUSHER_RADIUS,
-    speed: getRusherSpeedForStage(wave.stage),
+    radius,
+    speed,
     angle,
     wobblePhase: rng() * Math.PI * 2,
+    fireTimer,
+    strafeDir: rng() < 0.5 ? 1 : -1,
   });
   nextIdRef.current += 1;
 
-  wave.spawnQueueRemaining -= 1;
   wave.spawnTimer = wave.spawnInterval;
   return true;
 }
 
 export function stepEnemies(
-  enemies: RusherEnemy[],
+  enemies: Enemy[],
+  enemyProjectiles: EnemyProjectile[],
   playerX: number,
   playerY: number,
-  dt: number
+  dt: number,
+  viewportWidth: number,
+  viewportHeight: number
 ): void {
+  const arenaPad = 36;
+  const minX = arenaPad;
+  const maxX = Math.max(minX, viewportWidth - arenaPad);
+  const minY = arenaPad;
+  const maxY = Math.max(minY, viewportHeight - arenaPad);
+
   for (let i = 0; i < enemies.length; i += 1) {
     const enemy = enemies[i];
     const dx = playerX - enemy.x;
     const dy = playerY - enemy.y;
     const dist = Math.hypot(dx, dy);
+    const nx = dist > 0.001 ? dx / dist : 0;
+    const ny = dist > 0.001 ? dy / dist : 0;
 
     if (dist > 0.001) {
       enemy.angle = Math.atan2(dy, dx);
-      const step = Math.min(dist, enemy.speed * dt);
-      enemy.x += (dx / dist) * step;
-      enemy.y += (dy / dist) * step;
     }
 
-    enemy.wobblePhase += dt * 7.5;
+    if (enemy.kind === 'rusher') {
+      if (dist > 0.001) {
+        const step = Math.min(dist, enemy.speed * dt);
+        enemy.x += nx * step;
+        enemy.y += ny * step;
+      }
+      enemy.wobblePhase += dt * 7.5;
+    } else if (enemy.kind === 'blaster') {
+      // Kiter: keep distance between preferred min and max, strafe inside band
+      let vx = 0;
+      let vy = 0;
+      if (dist > BLASTER_PREFERRED_MAX_DIST) {
+        vx = nx * enemy.speed;
+        vy = ny * enemy.speed;
+      } else if (dist < BLASTER_PREFERRED_MIN_DIST) {
+        vx = -nx * enemy.speed;
+        vy = -ny * enemy.speed;
+      } else {
+        // Gentle orbital strafe around the player
+        vx = -ny * enemy.strafeDir * enemy.speed * 0.68;
+        vy = nx * enemy.strafeDir * enemy.speed * 0.68;
+      }
+
+      enemy.x = Math.max(minX, Math.min(maxX, enemy.x + vx * dt));
+      enemy.y = Math.max(minY, Math.min(maxY, enemy.y + vy * dt));
+      enemy.wobblePhase += dt * 4.5;
+
+      enemy.fireTimer -= dt;
+      if (enemy.fireTimer <= 0) {
+        const fireAngle = Math.atan2(playerY - enemy.y, playerX - enemy.x);
+        enemyProjectiles.push({
+          x: enemy.x + Math.cos(fireAngle) * (enemy.radius + 6),
+          y: enemy.y + Math.sin(fireAngle) * (enemy.radius + 6),
+          vx: Math.cos(fireAngle) * BLASTER_PROJECTILE_SPEED,
+          vy: Math.sin(fireAngle) * BLASTER_PROJECTILE_SPEED,
+          radius: ENEMY_PROJECTILE_RADIUS,
+          kind: 'blaster',
+        });
+        enemy.fireTimer = BLASTER_FIRE_INTERVAL;
+      }
+    } else {
+      // Drone: erratic wavy flight toward player + occasional faster aimed shot
+      enemy.wobblePhase += dt * 5.2;
+      const waveOffset =
+        Math.sin(enemy.wobblePhase) + 0.45 * Math.cos(enemy.wobblePhase * 1.9);
+      const perpX = -ny;
+      const perpY = nx;
+
+      const forwardStep = enemy.speed * dt;
+      const lateralStep = waveOffset * DRONE_WAVE_AMPLITUDE * dt;
+
+      enemy.x += nx * forwardStep + perpX * lateralStep;
+      enemy.y += ny * forwardStep + perpY * lateralStep;
+
+      enemy.fireTimer -= dt;
+      if (enemy.fireTimer <= 0) {
+        const fireAngle = Math.atan2(playerY - enemy.y, playerX - enemy.x);
+        enemyProjectiles.push({
+          x: enemy.x + Math.cos(fireAngle) * (enemy.radius + 6),
+          y: enemy.y + Math.sin(fireAngle) * (enemy.radius + 6),
+          vx: Math.cos(fireAngle) * DRONE_PROJECTILE_SPEED,
+          vy: Math.sin(fireAngle) * DRONE_PROJECTILE_SPEED,
+          radius: ENEMY_PROJECTILE_RADIUS,
+          kind: 'drone',
+        });
+        enemy.fireTimer = DRONE_FIRE_INTERVAL;
+      }
+    }
+  }
+}
+
+export function stepEnemyProjectiles(
+  enemyProjectiles: EnemyProjectile[],
+  dt: number,
+  viewportWidth: number,
+  viewportHeight: number
+): void {
+  for (let i = enemyProjectiles.length - 1; i >= 0; i -= 1) {
+    const p = enemyProjectiles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+
+    const cullMargin = p.radius + 10;
+    if (
+      p.x < -cullMargin ||
+      p.x > viewportWidth + cullMargin ||
+      p.y < -cullMargin ||
+      p.y > viewportHeight + cullMargin
+    ) {
+      enemyProjectiles.splice(i, 1);
+    }
   }
 }
 
@@ -229,13 +464,14 @@ export interface CollisionOutcome {
 export function resolveCombatCollisions(
   player: PlayerState,
   projectiles: Projectile[],
-  enemies: RusherEnemy[],
+  enemies: Enemy[],
+  enemyProjectiles: EnemyProjectile[],
   onPopEffect?: (x: number, y: number, color: string) => void
 ): CollisionOutcome {
   let enemiesDestroyed = 0;
   let playerHit = false;
 
-  // 1. Projectile vs Enemy collisions
+  // 1. Player Projectile vs Enemy collisions
   for (let ei = enemies.length - 1; ei >= 0; ei -= 1) {
     const enemy = enemies[ei];
     let destroyed = false;
@@ -251,7 +487,13 @@ export function resolveCombatCollisions(
         enemies.splice(ei, 1);
         enemiesDestroyed += 1;
         destroyed = true;
-        onPopEffect?.(enemy.x, enemy.y, '#A855F7');
+        const popColor =
+          enemy.kind === 'blaster'
+            ? '#F97316'
+            : enemy.kind === 'drone'
+              ? '#FACC15'
+              : '#A855F7';
+        onPopEffect?.(enemy.x, enemy.y, popColor);
         break;
       }
     }
@@ -266,12 +508,37 @@ export function resolveCombatCollisions(
     const playerHitDist = player.radius + enemy.radius - 3;
 
     if (pdx * pdx + pdy * pdy <= playerHitDist * playerHitDist) {
-      if (player.invulnTimer <= 0) {
+      if (player.shieldTimer > 0) {
+        enemies.splice(ei, 1);
+        enemiesDestroyed += 1;
+        onPopEffect?.(enemy.x, enemy.y, '#38BDF8');
+      } else if (player.invulnTimer <= 0) {
         player.lives = Math.max(0, player.lives - 1);
         player.invulnTimer = PLAYER_INVULN_SEC;
         playerHit = true;
         enemies.splice(ei, 1);
         onPopEffect?.(enemy.x, enemy.y, '#EF4444');
+      }
+    }
+  }
+
+  // 3. Enemy Projectile vs Player collision
+  for (let bi = enemyProjectiles.length - 1; bi >= 0; bi -= 1) {
+    const bullet = enemyProjectiles[bi];
+    const dx = player.x - bullet.x;
+    const dy = player.y - bullet.y;
+    const shieldRadius = player.shieldTimer > 0 ? player.radius + 12 : player.radius;
+    const hitDist = shieldRadius + bullet.radius - 2;
+
+    if (dx * dx + dy * dy <= hitDist * hitDist) {
+      enemyProjectiles.splice(bi, 1);
+      if (player.shieldTimer > 0) {
+        onPopEffect?.(bullet.x, bullet.y, '#38BDF8');
+      } else if (player.invulnTimer <= 0) {
+        player.lives = Math.max(0, player.lives - 1);
+        player.invulnTimer = PLAYER_INVULN_SEC;
+        playerHit = true;
+        onPopEffect?.(bullet.x, bullet.y, '#EF4444');
       }
     }
   }
@@ -291,7 +558,7 @@ export type StageStepEvent =
 
 export function stepStageProgression(
   wave: StageWaveState,
-  enemies: RusherEnemy[],
+  enemies: Enemy[],
   dt: number
 ): StageStepEvent {
   if (wave.clearedBannerStage !== null) {
@@ -304,7 +571,7 @@ export function stepStageProgression(
       const nextStage = wave.clearedBannerStage + 1;
       const nextWave = createStageWaveState(nextStage);
       wave.stage = nextWave.stage;
-      wave.spawnQueueRemaining = nextWave.spawnQueueRemaining;
+      wave.spawnQueue = nextWave.spawnQueue;
       wave.spawnTimer = nextWave.spawnTimer;
       wave.spawnInterval = nextWave.spawnInterval;
       wave.stageClearTimer = 0;
@@ -314,7 +581,7 @@ export function stepStageProgression(
     return { type: 'none' };
   }
 
-  if (wave.spawnQueueRemaining === 0 && enemies.length === 0) {
+  if (wave.spawnQueue.length === 0 && enemies.length === 0) {
     wave.clearedBannerStage = wave.stage;
     wave.stageClearTimer = STAGE_CLEAR_BANNER_SEC;
     return { type: 'stage_cleared', clearedStage: wave.stage };
@@ -532,7 +799,6 @@ export function generateCitySkyline(viewportWidth: number): SkylineBuilding[] {
     'slanted',
   ];
 
-  // Back silhouette layer (taller, softer contrast)
   let backX = -16;
   let backIndex = 0;
   while (backX < width + 40) {
@@ -557,7 +823,6 @@ export function generateCitySkyline(viewportWidth: number): SkylineBuilding[] {
     backIndex += 1;
   }
 
-  // Front silhouette layer (richer dark blue-gray foreground skyline)
   let frontX = -10;
   let frontIndex = 0;
   while (frontX < width + 40) {

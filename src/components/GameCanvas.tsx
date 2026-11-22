@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import {
+  activateShield,
   clampDeltaTime,
   clampPlayerPosition,
   computeAimAngle,
@@ -9,45 +10,54 @@ import {
   DEFAULT_AIM_ANGLE,
   generateCitySkyline,
   generateClouds,
+  getShieldSnapshot,
   getStationaryHeroGeometry,
   resolveCombatCollisions,
   screenToCanvasCoords,
   spawnBurstParticles,
   stepAmbientWorld,
   stepEnemies,
+  stepEnemyProjectiles,
   stepEnemySpawning,
   stepParticles,
   stepPlayerMovement,
   stepProjectiles,
+  stepShieldState,
   stepShooting,
   stepStageProgression,
 } from '../game/engine';
 import { renderSkyguardScene, renderStaticBackdrop } from '../game/renderer';
 import type {
   CloudSpec,
+  Enemy,
+  EnemyProjectile,
   GameOutcome,
   GameState,
   MovementInput,
   PlayerState,
   Projectile,
-  RusherEnemy,
+  ShieldStatus,
   StageWaveState,
 } from '../game/types';
 
 interface GameCanvasProps {
   gameState: GameState;
+  initialStage: number;
   runId: number;
   onLivesChange: (lives: number) => void;
   onStageChange: (stage: number) => void;
+  onShieldChange: (status: ShieldStatus, timeRemaining: number) => void;
   onStageClearedBannerChange: (clearedStage: number | null) => void;
   onRunEnd: (outcome: GameOutcome, stageReached: number, defeated: number) => void;
 }
 
 export function GameCanvas({
   gameState,
+  initialStage,
   runId,
   onLivesChange,
   onStageChange,
+  onShieldChange,
   onStageClearedBannerChange,
   onRunEnd,
 }: GameCanvasProps) {
@@ -55,12 +65,14 @@ export function GameCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const gameStateRef = useRef<GameState>(gameState);
   const prevGameStateRef = useRef<GameState>(gameState);
+  const initialStageRef = useRef<number>(initialStage);
   const runIdRef = useRef<number>(runId);
   const prevRunIdRef = useRef<number>(runId);
 
   const callbacksRef = useRef({
     onLivesChange,
     onStageChange,
+    onShieldChange,
     onStageClearedBannerChange,
     onRunEnd,
   });
@@ -70,6 +82,10 @@ export function GameCanvas({
   }, [gameState]);
 
   useEffect(() => {
+    initialStageRef.current = initialStage;
+  }, [initialStage]);
+
+  useEffect(() => {
     runIdRef.current = runId;
   }, [runId]);
 
@@ -77,10 +93,17 @@ export function GameCanvas({
     callbacksRef.current = {
       onLivesChange,
       onStageChange,
+      onShieldChange,
       onStageClearedBannerChange,
       onRunEnd,
     };
-  }, [onLivesChange, onStageChange, onStageClearedBannerChange, onRunEnd]);
+  }, [
+    onLivesChange,
+    onStageChange,
+    onShieldChange,
+    onStageClearedBannerChange,
+    onRunEnd,
+  ]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -109,15 +132,18 @@ export function GameCanvas({
 
     let player: PlayerState = createInitialPlayerState(width, height);
     const projectiles: Projectile[] = [];
-    const enemies: RusherEnemy[] = [];
+    const enemies: Enemy[] = [];
+    const enemyProjectiles: EnemyProjectile[] = [];
     const particles = createParticlePool(96);
     const particleCursorRef = { current: 0 };
     const nextEnemyIdRef = { current: 1 };
-    let wave: StageWaveState = createStageWaveState(1);
+    let wave: StageWaveState = createStageWaveState(initialStageRef.current);
     let enemiesDefeated = 0;
     let lastReportedLives = player.lives;
     let lastReportedStage = wave.stage;
     let lastReportedBanner: number | null = null;
+    let lastReportedShieldStatus: ShieldStatus = 'READY';
+    let lastReportedShieldTime = 0;
 
     const keysHeld = new Set<string>();
     let mouseDown = false;
@@ -134,10 +160,11 @@ export function GameCanvas({
       player = createInitialPlayerState(width, height);
       projectiles.length = 0;
       enemies.length = 0;
+      enemyProjectiles.length = 0;
       for (let i = 0; i < particles.length; i += 1) {
         particles[i].active = false;
       }
-      wave = createStageWaveState(1);
+      wave = createStageWaveState(initialStageRef.current);
       enemiesDefeated = 0;
       clearHeldInputs();
 
@@ -152,6 +179,11 @@ export function GameCanvas({
       if (lastReportedBanner !== null) {
         lastReportedBanner = null;
         callbacksRef.current.onStageClearedBannerChange(null);
+      }
+      if (lastReportedShieldStatus !== 'READY' || lastReportedShieldTime !== 0) {
+        lastReportedShieldStatus = 'READY';
+        lastReportedShieldTime = 0;
+        callbacksRef.current.onShieldChange('READY', 0);
       }
     };
 
@@ -205,14 +237,18 @@ export function GameCanvas({
     observer.observe(container);
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.code === 'ArrowUp' ||
-        event.code === 'ArrowDown' ||
-        event.code === 'ArrowLeft' ||
-        event.code === 'ArrowRight'
-      ) {
-        if (gameStateRef.current === 'playing') {
+      if (gameStateRef.current === 'playing') {
+        if (
+          event.code === 'ArrowUp' ||
+          event.code === 'ArrowDown' ||
+          event.code === 'ArrowLeft' ||
+          event.code === 'ArrowRight' ||
+          event.code === 'Space'
+        ) {
           event.preventDefault();
+        }
+        if (event.code === 'Space' && !event.repeat) {
+          activateShield(player);
         }
       }
       keysHeld.add(event.code);
@@ -320,6 +356,7 @@ export function GameCanvas({
 
       if (currentState === 'playing') {
         stepPlayerMovement(player, readMovementInput(), dt, width, height);
+        stepShieldState(player, dt);
 
         if (hasCursor) {
           player.aimAngle = computeAimAngle(
@@ -346,16 +383,39 @@ export function GameCanvas({
           player.x,
           player.y
         );
-        stepEnemies(enemies, player.x, player.y, dt);
+        stepEnemies(
+          enemies,
+          enemyProjectiles,
+          player.x,
+          player.y,
+          dt,
+          width,
+          height
+        );
+        stepEnemyProjectiles(enemyProjectiles, dt, width, height);
 
         const combat = resolveCombatCollisions(
           player,
           projectiles,
           enemies,
+          enemyProjectiles,
           (px, py, color) =>
             spawnBurstParticles(particles, particleCursorRef, px, py, color, 10)
         );
         enemiesDefeated += combat.enemiesDestroyed;
+
+        const shieldSnap = getShieldSnapshot(player);
+        if (
+          shieldSnap.status !== lastReportedShieldStatus ||
+          shieldSnap.timeRemaining !== lastReportedShieldTime
+        ) {
+          lastReportedShieldStatus = shieldSnap.status;
+          lastReportedShieldTime = shieldSnap.timeRemaining;
+          callbacksRef.current.onShieldChange(
+            shieldSnap.status,
+            shieldSnap.timeRemaining
+          );
+        }
 
         if (player.lives !== lastReportedLives) {
           lastReportedLives = player.lives;
@@ -396,19 +456,26 @@ export function GameCanvas({
       const heroYStr = String(Math.round(player.y));
       const aimStr = player.aimAngle.toFixed(2);
       const projStr = String(projectiles.length);
+      const enemyProjStr = String(enemyProjectiles.length);
       const enemyStr = String(enemies.length);
-      const queueStr = String(wave.spawnQueueRemaining);
+      const queueStr = String(wave.spawnQueue.length);
       const livesStr = String(player.lives);
       const stageStr = String(wave.stage);
+      const shieldSnapNow = getShieldSnapshot(player);
+      const shieldStatusStr = shieldSnapNow.status;
 
       if (canvas.dataset.heroX !== heroXStr) canvas.dataset.heroX = heroXStr;
       if (canvas.dataset.heroY !== heroYStr) canvas.dataset.heroY = heroYStr;
       if (canvas.dataset.aimAngle !== aimStr) canvas.dataset.aimAngle = aimStr;
       if (canvas.dataset.projectiles !== projStr) canvas.dataset.projectiles = projStr;
+      if (canvas.dataset.enemyProjectiles !== enemyProjStr)
+        canvas.dataset.enemyProjectiles = enemyProjStr;
       if (canvas.dataset.enemies !== enemyStr) canvas.dataset.enemies = enemyStr;
       if (canvas.dataset.spawnQueue !== queueStr) canvas.dataset.spawnQueue = queueStr;
       if (canvas.dataset.lives !== livesStr) canvas.dataset.lives = livesStr;
       if (canvas.dataset.stage !== stageStr) canvas.dataset.stage = stageStr;
+      if (canvas.dataset.shieldStatus !== shieldStatusStr)
+        canvas.dataset.shieldStatus = shieldStatusStr;
 
       if (needsRender) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -421,6 +488,7 @@ export function GameCanvas({
           player,
           projectiles,
           enemies,
+          enemyProjectiles,
           particles,
         });
         needsRender = false;

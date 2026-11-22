@@ -5,8 +5,12 @@ import { PauseModal } from './components/PauseModal';
 import { StageBanner } from './components/StageBanner';
 import { StartOverlay } from './components/StartOverlay';
 import { TopHud } from './components/TopHud';
-import { createInitialHudSnapshot, transitionGameState } from './game/engine';
-import type { GameOutcome, GameState } from './game/types';
+import {
+  createInitialHudSnapshot,
+  TOTAL_STAGES,
+  transitionGameState,
+} from './game/engine';
+import type { GameOutcome, GameState, ShieldStatus } from './game/types';
 
 function getInitialGameState(): GameState {
   if (typeof window !== 'undefined') {
@@ -18,9 +22,21 @@ function getInitialGameState(): GameState {
   return 'title';
 }
 
+function getInitialStage(): number {
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    const parsed = Number.parseInt(params.get('stage') ?? '', 10);
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= TOTAL_STAGES) {
+      return parsed;
+    }
+  }
+  return 1;
+}
+
 export default function App() {
+  const [initialStage] = useState<number>(getInitialStage);
   const [gameState, setGameState] = useState<GameState>(getInitialGameState);
-  const [hud, setHud] = useState(createInitialHudSnapshot);
+  const [hud, setHud] = useState(() => createInitialHudSnapshot(initialStage));
   const [clearedStageBanner, setClearedStageBanner] = useState<number | null>(
     null
   );
@@ -50,11 +66,11 @@ export default function App() {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
-    setHud(createInitialHudSnapshot());
+    setHud(createInitialHudSnapshot(initialStage));
     setClearedStageBanner(null);
     setRunId((id) => id + 1);
     setGameState((prev) => transitionGameState(prev, 'RESTART'));
-  }, []);
+  }, [initialStage]);
 
   const handleResume = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
@@ -67,11 +83,11 @@ export default function App() {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
-    setHud(createInitialHudSnapshot());
+    setHud(createInitialHudSnapshot(initialStage));
     setClearedStageBanner(null);
     setRunId((id) => id + 1);
     setGameState((prev) => transitionGameState(prev, 'RETURN_TITLE'));
-  }, []);
+  }, [initialStage]);
 
   const handleLivesChange = useCallback((lives: number) => {
     setHud((prev) => (prev.lives === lives ? prev : { ...prev, lives }));
@@ -80,6 +96,18 @@ export default function App() {
   const handleStageChange = useCallback((stage: number) => {
     setHud((prev) => (prev.stage === stage ? prev : { ...prev, stage }));
   }, []);
+
+  const handleShieldChange = useCallback(
+    (shieldStatus: ShieldStatus, shieldTimeRemaining: number) => {
+      setHud((prev) =>
+        prev.shieldStatus === shieldStatus &&
+        prev.shieldTimeRemaining === shieldTimeRemaining
+          ? prev
+          : { ...prev, shieldStatus, shieldTimeRemaining }
+      );
+    },
+    []
+  );
 
   const handleRunEnd = useCallback(
     (outcome: GameOutcome, stageReached: number, enemiesDefeated: number) => {
@@ -137,9 +165,11 @@ export default function App() {
     <main className="relative h-full w-full overflow-hidden">
       <GameCanvas
         gameState={gameState}
+        initialStage={initialStage}
         runId={runId}
         onLivesChange={handleLivesChange}
         onStageChange={handleStageChange}
+        onShieldChange={handleShieldChange}
         onStageClearedBannerChange={setClearedStageBanner}
         onRunEnd={handleRunEnd}
       />

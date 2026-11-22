@@ -1,13 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  activateShield,
+  BLASTER_PROJECTILE_SPEED,
   clampDeltaTime,
   computeAimAngle,
   createInitialHudSnapshot,
   createInitialPlayerState,
   createStageWaveState,
+  DRONE_PROJECTILE_SPEED,
   generateCitySkyline,
   generateClouds,
+  getShieldSnapshot,
   getStationaryHeroGeometry,
   HERO_EDGE_MARGIN,
   HERO_MOVE_SPEED,
@@ -17,19 +21,23 @@ import {
   PROJECTILE_SPEED,
   resolveCombatCollisions,
   RUSHER_RADIUS,
+  SHIELD_COOLDOWN_SEC,
+  SHIELD_DURATION_SEC,
   SHOT_COOLDOWN_SEC,
   STAGE_CLEAR_BANNER_SEC,
-  STAGE_RUSHER_COUNTS,
+  STAGE_COMPOSITIONS,
   stepAmbientWorld,
   stepEnemies,
+  stepEnemyProjectiles,
   stepEnemySpawning,
   stepPlayerMovement,
   stepProjectiles,
+  stepShieldState,
   stepShooting,
   stepStageProgression,
   transitionGameState,
 } from './engine';
-import type { Projectile, RusherEnemy } from './types';
+import type { Enemy, EnemyProjectile, Projectile } from './types';
 
 test('clampDeltaTime clamps negative, NaN, and oversized spikes', () => {
   assert.equal(clampDeltaTime(-10), 0);
@@ -45,6 +53,7 @@ test('createInitialHudSnapshot provides Stage 1/5, 3 lives, and READY shield', (
   assert.equal(hud.stage, 1);
   assert.equal(hud.maxStages, 5);
   assert.equal(hud.shieldStatus, 'READY');
+  assert.equal(hud.shieldTimeRemaining, 0);
 });
 
 test('transitionGameState enforces valid state transitions including gameover and restart', () => {
@@ -164,26 +173,38 @@ test('stepProjectiles moves in a straight line and removes projectiles off-scree
   assert.equal(projectiles[0].y, 400);
 });
 
-test('5 stages configure increasing rusher counts and trickle spawning', () => {
-  assert.deepEqual([...STAGE_RUSHER_COUNTS], [4, 5, 5, 6, 7]);
-  const wave = createStageWaveState(1);
-  assert.equal(wave.spawnQueueRemaining, 4);
+test('5 stage compositions mix rushers, blasters, and drones with escalating totals', () => {
+  assert.equal(STAGE_COMPOSITIONS.length, 5);
+  const totals = STAGE_COMPOSITIONS.map((c) => c.rushers + c.blasters + c.drones);
+  for (let i = 1; i < totals.length; i += 1) {
+    assert.ok(totals[i] > totals[i - 1], 'each stage must increase enemy count');
+  }
+  assert.ok(STAGE_COMPOSITIONS[1].blasters > 0);
+  assert.ok(STAGE_COMPOSITIONS[2].drones > 0);
+  assert.ok(STAGE_COMPOSITIONS[4].rushers > STAGE_COMPOSITIONS[0].rushers);
 
-  const enemies: RusherEnemy[] = [];
+  const wave = createStageWaveState(3, () => 0.4);
+  assert.equal(wave.spawnQueue.length, totals[2]);
+  assert.ok(wave.spawnQueue.includes('rusher'));
+  assert.ok(wave.spawnQueue.includes('blaster'));
+  assert.ok(wave.spawnQueue.includes('drone'));
+});
+
+test('stepEnemySpawning trickles enemies from stage queue', () => {
+  const wave = createStageWaveState(1, () => 0.1);
+  const enemies: Enemy[] = [];
   const nextId = { current: 1 };
 
-  // Before initial delay, nothing spawns
   assert.equal(
     stepEnemySpawning(wave, enemies, 0.2, 1000, 800, nextId, 500, 400, () => 0.1),
     false
   );
-  // After initial delay, spawns 1 enemy at a time
   assert.equal(
     stepEnemySpawning(wave, enemies, 0.6, 1000, 800, nextId, 500, 400, () => 0.1),
     true
   );
   assert.equal(enemies.length, 1);
-  assert.equal(wave.spawnQueueRemaining, 3);
+  assert.equal(wave.spawnQueue.length, 3);
 });
 
 test('pickEdgeSpawnPoint spawns along screen edges', () => {
@@ -193,13 +214,109 @@ test('pickEdgeSpawnPoint spawns along screen edges', () => {
   assert.ok(right.x > 1000);
 });
 
-test('stepEnemies moves rushers directly toward player', () => {
-  const enemies: RusherEnemy[] = [
-    { id: 1, x: 100, y: 400, radius: 20, speed: 200, angle: 0, wobblePhase: 0 },
+test('Blaster keeps distance and fires slow aimed shots while Drone weaves and fires faster shots', () => {
+  const playerX = 500;
+  const playerY = 400;
+  const enemyProjectiles: EnemyProjectile[] = [];
+  const enemies: Enemy[] = [
+    {
+      id: 1,
+      kind: 'blaster',
+      x: 420, // too close (80px < 250px) -> should back away
+      y: 400,
+      radius: 22,
+      speed: 120,
+      angle: 0,
+      wobblePhase: 0,
+      fireTimer: 0.05,
+      strafeDir: 1,
+    },
+    {
+      id: 2,
+      kind: 'drone',
+      x: 800,
+      y: 400,
+      radius: 20,
+      speed: 170,
+      angle: Math.PI,
+      wobblePhase: 0.5,
+      fireTimer: 0.05,
+      strafeDir: 1,
+    },
   ];
-  stepEnemies(enemies, 500, 400, 0.5);
-  assert.equal(enemies[0].x, 200);
-  assert.equal(enemies[0].y, 400);
+
+  stepEnemies(enemies, enemyProjectiles, playerX, playerY, 0.1, 1000, 800);
+
+  // Blaster backed away from player
+  assert.ok(enemies[0].x < 420);
+  // Drone moved closer while weaving laterally (y shifted)
+  assert.ok(enemies[1].x < 800);
+  assert.notEqual(enemies[1].y, 400);
+
+  // Both fired aimed projectiles, Drone's projectile faster than Blaster's
+  assert.equal(enemyProjectiles.length, 2);
+  const blasterSpeed = Math.hypot(enemyProjectiles[0].vx, enemyProjectiles[0].vy);
+  const droneSpeed = Math.hypot(enemyProjectiles[1].vx, enemyProjectiles[1].vy);
+  assert.ok(Math.abs(blasterSpeed - BLASTER_PROJECTILE_SPEED) < 1e-3);
+  assert.ok(Math.abs(droneSpeed - DRONE_PROJECTILE_SPEED) < 1e-3);
+  assert.ok(droneSpeed > blasterSpeed);
+
+  // Off-screen projectile culling
+  enemyProjectiles.push({
+    x: 1050,
+    y: 400,
+    vx: 100,
+    vy: 0,
+    radius: 6,
+    kind: 'blaster',
+  });
+  stepEnemyProjectiles(enemyProjectiles, 0.1, 1000, 800);
+  assert.equal(enemyProjectiles.length, 2);
+});
+
+test('shield activates for duration, grants full invulnerability, and enters cooldown', () => {
+  const player = createInitialPlayerState(1000, 800);
+  player.x = 500;
+  player.y = 400;
+
+  assert.equal(getShieldSnapshot(player).status, 'READY');
+  assert.equal(activateShield(player), true);
+  assert.equal(activateShield(player), false, 'cannot re-activate while active');
+  assert.equal(getShieldSnapshot(player).status, 'ACTIVE');
+
+  // Shield blocks both enemy contact and enemy projectile damage
+  const enemies: Enemy[] = [
+    {
+      id: 1,
+      kind: 'rusher',
+      x: 505,
+      y: 400,
+      radius: 20,
+      speed: 150,
+      angle: 0,
+      wobblePhase: 0,
+      fireTimer: 99,
+      strafeDir: 1,
+    },
+  ];
+  const enemyProjectiles: EnemyProjectile[] = [
+    { x: 500, y: 400, vx: 100, vy: 0, radius: 6, kind: 'drone' },
+  ];
+  const outcome = resolveCombatCollisions(player, [], enemies, enemyProjectiles);
+  assert.equal(outcome.playerHit, false);
+  assert.equal(player.lives, 3);
+  assert.equal(enemies.length, 0);
+  assert.equal(enemyProjectiles.length, 0);
+
+  // Advance past shield duration -> transitions to cooldown
+  stepShieldState(player, SHIELD_DURATION_SEC + 0.1);
+  assert.equal(getShieldSnapshot(player).status, 'COOLDOWN');
+  assert.equal(activateShield(player), false, 'cannot activate during cooldown');
+
+  // Advance past cooldown -> returns to READY
+  stepShieldState(player, SHIELD_COOLDOWN_SEC + 0.1);
+  assert.equal(getShieldSnapshot(player).status, 'READY');
+  assert.equal(activateShield(player), true);
 });
 
 test('resolveCombatCollisions destroys enemy on projectile hit and handles player damage + invulnerability', () => {
@@ -210,13 +327,46 @@ test('resolveCombatCollisions destroys enemy on projectile hit and handles playe
   const projectiles: Projectile[] = [
     { x: 200, y: 200, vx: 0, vy: 0, radius: 6, angle: 0 },
   ];
-  const enemies: RusherEnemy[] = [
-    { id: 1, x: 205, y: 200, radius: 20, speed: 150, angle: 0, wobblePhase: 0 },
-    { id: 2, x: 505, y: 400, radius: 20, speed: 150, angle: 0, wobblePhase: 0 },
-    { id: 3, x: 510, y: 400, radius: 20, speed: 150, angle: 0, wobblePhase: 0 },
+  const enemies: Enemy[] = [
+    {
+      id: 1,
+      kind: 'rusher',
+      x: 205,
+      y: 200,
+      radius: 20,
+      speed: 150,
+      angle: 0,
+      wobblePhase: 0,
+      fireTimer: 99,
+      strafeDir: 1,
+    },
+    {
+      id: 2,
+      kind: 'rusher',
+      x: 505,
+      y: 400,
+      radius: 20,
+      speed: 150,
+      angle: 0,
+      wobblePhase: 0,
+      fireTimer: 99,
+      strafeDir: 1,
+    },
+    {
+      id: 3,
+      kind: 'rusher',
+      x: 510,
+      y: 400,
+      radius: 20,
+      speed: 150,
+      angle: 0,
+      wobblePhase: 0,
+      fireTimer: 99,
+      strafeDir: 1,
+    },
   ];
 
-  const res1 = resolveCombatCollisions(player, projectiles, enemies);
+  const res1 = resolveCombatCollisions(player, projectiles, enemies, []);
   assert.equal(res1.enemiesDestroyed, 1);
   assert.equal(res1.playerHit, true);
   assert.equal(player.lives, 2);
@@ -224,40 +374,56 @@ test('resolveCombatCollisions destroys enemy on projectile hit and handles playe
   assert.equal(res1.gameOver, false);
   assert.equal(projectiles.length, 0);
 
-  // Enemy 3 overlaps while invulnerable -> no extra damage
-  const res2 = resolveCombatCollisions(player, projectiles, enemies);
+  const res2 = resolveCombatCollisions(player, projectiles, enemies, []);
   assert.equal(res2.playerHit, false);
   assert.equal(player.lives, 2);
 
-  // Deplete remaining lives -> game over
   player.invulnTimer = 0;
-  enemies.push({ id: 4, x: 505, y: 400, radius: 20, speed: 150, angle: 0, wobblePhase: 0 });
-  resolveCombatCollisions(player, projectiles, enemies);
+  enemies.push({
+    id: 4,
+    kind: 'rusher',
+    x: 505,
+    y: 400,
+    radius: 20,
+    speed: 150,
+    angle: 0,
+    wobblePhase: 0,
+    fireTimer: 99,
+    strafeDir: 1,
+  });
+  resolveCombatCollisions(player, projectiles, enemies, []);
   player.invulnTimer = 0;
-  const res3 = resolveCombatCollisions(player, projectiles, enemies);
+  const res3 = resolveCombatCollisions(player, projectiles, enemies, []);
   assert.equal(player.lives, 0);
   assert.equal(res3.gameOver, true);
 });
 
 test('stepStageProgression clears stage when queue and enemies empty, then advances after banner', () => {
   const wave = createStageWaveState(1);
-  const enemies: RusherEnemy[] = [];
+  const enemies: Enemy[] = [];
 
-  // Not cleared while queue remains
   assert.equal(stepStageProgression(wave, enemies, 0.016).type, 'none');
 
-  // Empty queue + active enemy -> not cleared yet
-  wave.spawnQueueRemaining = 0;
-  enemies.push({ id: 1, x: 10, y: 10, radius: 20, speed: 100, angle: 0, wobblePhase: 0 });
+  wave.spawnQueue = [];
+  enemies.push({
+    id: 1,
+    kind: 'rusher',
+    x: 10,
+    y: 10,
+    radius: 20,
+    speed: 100,
+    angle: 0,
+    wobblePhase: 0,
+    fireTimer: 99,
+    strafeDir: 1,
+  });
   assert.equal(stepStageProgression(wave, enemies, 0.016).type, 'none');
 
-  // Empty queue + 0 enemies -> stage cleared!
   enemies.length = 0;
   const clearedEvent = stepStageProgression(wave, enemies, 0.016);
   assert.deepEqual(clearedEvent, { type: 'stage_cleared', clearedStage: 1 });
   assert.equal(wave.clearedBannerStage, 1);
 
-  // Advance through banner duration -> starts stage 2
   const startedEvent = stepStageProgression(
     wave,
     enemies,
@@ -265,5 +431,5 @@ test('stepStageProgression clears stage when queue and enemies empty, then advan
   );
   assert.deepEqual(startedEvent, { type: 'stage_started', nextStage: 2 });
   assert.equal(wave.stage, 2);
-  assert.equal(wave.spawnQueueRemaining, 5);
+  assert.equal(wave.spawnQueue.length, 6);
 });

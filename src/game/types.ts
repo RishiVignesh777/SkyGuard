@@ -10,6 +10,7 @@ export interface GameHudSnapshot {
   stage: number;
   maxStages: number;
   shieldStatus: ShieldStatus;
+  shieldTimeRemaining: number;
 }
 
 export interface SkylineBuilding {
@@ -46,6 +47,8 @@ export interface PlayerState {
   lives: number;
   maxLives: number;
   invulnTimer: number;
+  shieldTimer: number;
+  shieldCooldown: number;
 }
 
 export interface MovementInput {
@@ -64,14 +67,28 @@ export interface Projectile {
   angle: number;
 }
 
-export interface RusherEnemy {
+export type EnemyKind = 'rusher' | 'blaster' | 'drone';
+
+export interface Enemy {
   id: number;
+  kind: EnemyKind;
   x: number;
   y: number;
   radius: number;
   speed: number;
   angle: number;
   wobblePhase: number;
+  fireTimer: number;
+  strafeDir: 1 | -1;
+}
+
+export interface EnemyProjectile {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  kind: 'blaster' | 'drone';
 }
 
 export interface BurstParticle {
@@ -88,7 +105,7 @@ export interface BurstParticle {
 
 export interface StageWaveState {
   stage: number;
-  spawnQueueRemaining: number;
+  spawnQueue: EnemyKind[];
   spawnTimer: number;
   spawnInterval: number;
   stageClearTimer: number;
