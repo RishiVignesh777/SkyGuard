@@ -1,5 +1,6 @@
 import { DEFAULT_AIM_ANGLE } from './engine';
 import type {
+  BossEnemy,
   BurstParticle,
   CloudSpec,
   Enemy,
@@ -26,6 +27,7 @@ export interface DynamicSceneParams {
   enemies: Enemy[];
   enemyProjectiles: EnemyProjectile[];
   particles: BurstParticle[];
+  boss?: BossEnemy | null;
 }
 
 export function renderStaticBackdrop(
@@ -52,6 +54,7 @@ export function renderSkyguardScene(
     enemies,
     enemyProjectiles,
     particles,
+    boss,
   } = params;
 
   ctx.drawImage(backdropCanvas, 0, 0, width, height);
@@ -60,6 +63,9 @@ export function renderSkyguardScene(
   drawProjectiles(ctx, projectiles);
   drawEnemyProjectiles(ctx, enemyProjectiles);
   drawEnemies(ctx, enemies, elapsedTime);
+  if (boss && boss.hp > 0) {
+    drawBoss(ctx, boss, player.x, player.y, elapsedTime);
+  }
   drawHero(ctx, player, elapsedTime);
 }
 
@@ -477,35 +483,188 @@ function drawEnemyProjectiles(
 ): void {
   for (let i = 0; i < enemyProjectiles.length; i += 1) {
     const p = enemyProjectiles[i];
+    const isBoss = p.kind === 'boss';
     const isDrone = p.kind === 'drone';
 
     ctx.save();
     ctx.translate(p.x, p.y);
 
     // Outer hazard halo
-    ctx.fillStyle = isDrone
-      ? 'rgba(244, 63, 94, 0.35)'
-      : 'rgba(249, 115, 22, 0.35)';
+    ctx.fillStyle = isBoss
+      ? 'rgba(192, 132, 252, 0.42)'
+      : isDrone
+        ? 'rgba(244, 63, 94, 0.35)'
+        : 'rgba(249, 115, 22, 0.35)';
     ctx.beginPath();
-    ctx.arc(0, 0, p.radius * 1.85, 0, Math.PI * 2);
+    ctx.arc(0, 0, p.radius * 1.9, 0, Math.PI * 2);
     ctx.fill();
 
     // Solid projectile sphere with dark outline
-    ctx.fillStyle = isDrone ? '#FB7185' : '#F97316';
+    ctx.fillStyle = isBoss ? '#C026D3' : isDrone ? '#FB7185' : '#F97316';
     ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 2.2;
+    ctx.lineWidth = isBoss ? 2.6 : 2.2;
     ctx.beginPath();
     ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#FFFFFF';
+    ctx.fillStyle = isBoss ? '#FEF08A' : '#FFFFFF';
     ctx.beginPath();
-    ctx.arc(-1.5, -1.5, p.radius * 0.38, 0, Math.PI * 2);
+    ctx.arc(-1.5, -1.5, p.radius * 0.4, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.restore();
   }
+}
+
+function drawBoss(
+  ctx: CanvasRenderingContext2D,
+  boss: BossEnemy,
+  playerX: number,
+  playerY: number,
+  elapsedTime: number
+): void {
+  const r = boss.radius;
+  const isFlashing = boss.hitFlashTimer > 0;
+  const isWindup = boss.phase === 'charge_windup';
+  const isCharging = boss.phase === 'charge';
+
+  // Charge windup sightline telegraph so player can read the rush target
+  if (isWindup) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(251, 113, 133, 0.65)';
+    ctx.lineWidth = 4;
+    ctx.setLineDash([12, 10]);
+    ctx.beginPath();
+    ctx.moveTo(boss.x, boss.y);
+    ctx.lineTo(boss.chargeTargetX, boss.chargeTargetY);
+    ctx.stroke();
+
+    const pulseR = 16 + Math.sin(elapsedTime * 18) * 4;
+    ctx.setLineDash([]);
+    ctx.strokeStyle = '#FB7185';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(boss.chargeTargetX, boss.chargeTargetY, pulseR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.translate(boss.x, boss.y);
+
+  // Ground shadow
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.24)';
+  ctx.beginPath();
+  ctx.ellipse(0, r * 1.12, r * 0.96, r * 0.28, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Pulsing aura during windup / charge
+  if (isWindup || isCharging) {
+    const auraScale = 1.18 + Math.sin(elapsedTime * 20) * 0.06;
+    ctx.fillStyle = isCharging
+      ? 'rgba(244, 63, 94, 0.26)'
+      : 'rgba(250, 204, 21, 0.24)';
+    ctx.beginPath();
+    ctx.arc(0, 0, r * auraScale, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Menacing horned crown / shoulder spikes
+  ctx.fillStyle = isFlashing ? '#F3E8FF' : '#3B0764';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 3.5;
+  ctx.lineJoin = 'round';
+  for (const side of [-1, 1] as const) {
+    ctx.beginPath();
+    ctx.moveTo(side * r * 0.45, -r * 0.72);
+    ctx.lineTo(side * r * 1.02, -r * 1.08);
+    ctx.lineTo(side * r * 0.88, -r * 0.34);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(side * r * 0.84, -r * 0.15);
+    ctx.lineTo(side * r * 1.16, r * 0.12);
+    ctx.lineTo(side * r * 0.84, r * 0.45);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Main dark purple armored body
+  ctx.fillStyle = isFlashing ? '#F5F3FF' : '#4C1D95';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 3.8;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Inner armor crest highlight
+  ctx.fillStyle = isFlashing ? '#FFFFFF' : '#6D28D9';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.16, -r * 0.24, r * 0.64, r * 0.44, -0.25, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Lower jaw / armor plate
+  ctx.fillStyle = isFlashing ? '#E9D5FF' : '#2E1065';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.roundRect(-r * 0.54, r * 0.22, r * 1.08, r * 0.36, 10);
+  ctx.fill();
+  ctx.stroke();
+
+  // Armor vents on jaw plate
+  ctx.fillStyle = isWindup || isCharging ? '#FB7185' : '#A855F7';
+  for (let vi = -1; vi <= 1; vi += 1) {
+    ctx.fillRect(vi * r * 0.24 - 4, r * 0.3, 8, r * 0.2);
+  }
+
+  // Glowing eyes subtly tracking target direction
+  const lookAngle = isWindup || isCharging
+    ? Math.atan2(boss.chargeTargetY - boss.y, boss.chargeTargetX - boss.x)
+    : Math.atan2(playerY - boss.y, playerX - boss.x);
+  const lookX = Math.cos(lookAngle) * 3.5;
+  const lookY = Math.sin(lookAngle) * 2.5;
+  const eyeGlow = isWindup || isCharging ? '#FB7185' : '#FDE047';
+  const eyeAura = isWindup || isCharging
+    ? 'rgba(251, 113, 133, 0.5)'
+    : 'rgba(253, 224, 71, 0.45)';
+
+  for (const side of [-1, 1] as const) {
+    const ex = side * r * 0.34;
+    const ey = -r * 0.14;
+
+    // Eye outer glow
+    ctx.fillStyle = eyeAura;
+    ctx.beginPath();
+    ctx.arc(ex, ey, r * 0.24, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Fierce angry angled eye socket (outer corner raised, inner corner lowered)
+    ctx.fillStyle = eyeGlow;
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.moveTo(ex - side * r * 0.16, ey - r * 0.02);
+    ctx.lineTo(ex + side * r * 0.2, ey - r * 0.16);
+    ctx.lineTo(ex + side * r * 0.14, ey + r * 0.08);
+    ctx.lineTo(ex - side * r * 0.12, ey + r * 0.12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Tracking pupil
+    ctx.fillStyle = '#0F172A';
+    ctx.beginPath();
+    ctx.arc(ex + lookX, ey + lookY, r * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
 
 function drawHero(

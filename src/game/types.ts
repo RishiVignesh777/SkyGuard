@@ -82,13 +82,33 @@ export interface Enemy {
   strafeDir: 1 | -1;
 }
 
+export type BossPhase = 'spread' | 'charge_windup' | 'charge';
+
+export interface BossEnemy {
+  x: number;
+  y: number;
+  radius: number;
+  hp: number;
+  maxHp: number;
+  phase: BossPhase;
+  phaseTimer: number;
+  fireTimer: number;
+  driftDir: 1 | -1;
+  chargeTargetX: number;
+  chargeTargetY: number;
+  chargeVx: number;
+  chargeVy: number;
+  hitFlashTimer: number;
+  eyePulse: number;
+}
+
 export interface EnemyProjectile {
   x: number;
   y: number;
   vx: number;
   vy: number;
   radius: number;
-  kind: 'blaster' | 'drone';
+  kind: 'blaster' | 'drone' | 'boss';
 }
 
 export interface BurstParticle {
@@ -110,4 +130,6 @@ export interface StageWaveState {
   spawnInterval: number;
   stageClearTimer: number;
   clearedBannerStage: number | null;
+  bossIncomingTimer: number;
+  bossActive: boolean;
 }

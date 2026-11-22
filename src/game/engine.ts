@@ -1,4 +1,5 @@
 import type {
+  BossEnemy,
   BurstParticle,
   CloudSpec,
   Enemy,
@@ -46,6 +47,19 @@ export const DRONE_SPEED_PER_STAGE = 12;
 export const DRONE_WAVE_AMPLITUDE = 135;
 export const DRONE_FIRE_INTERVAL = 2.5;
 export const DRONE_PROJECTILE_SPEED = 370;
+
+export const BOSS_MAX_HP = 40;
+export const BOSS_RADIUS = 56;
+export const BOSS_DRIFT_SPEED = 85;
+export const BOSS_SPREAD_DURATION_SEC = 4.6;
+export const BOSS_SPREAD_FIRE_INTERVAL = 1.35;
+export const BOSS_SPREAD_ANGLES = [-0.54, -0.27, 0, 0.27, 0.54] as const;
+export const BOSS_PROJECTILE_SPEED = 275;
+export const BOSS_PROJECTILE_RADIUS = 8;
+export const BOSS_CHARGE_WINDUP_SEC = 0.55;
+export const BOSS_CHARGE_SPEED = 560;
+export const BOSS_CHARGE_MAX_SEC = 1.35;
+export const BOSS_INCOMING_BANNER_SEC = 2.1;
 
 export const ENEMY_PROJECTILE_RADIUS = 6;
 export const PLAYER_INVULN_SEC = 1.4;
@@ -210,7 +224,6 @@ export function buildStageSpawnQueue(
   for (let i = 0; i < comp.blasters; i += 1) queue.push('blaster');
   for (let i = 0; i < comp.drones; i += 1) queue.push('drone');
 
-  // Keep a rusher first so Stage 1+ opens cleanly, shuffle the rest
   for (let i = queue.length - 1; i > 1; i -= 1) {
     const j = 1 + Math.floor(rng() * i);
     const tmp = queue[i];
@@ -235,7 +248,151 @@ export function createStageWaveState(
     spawnInterval: comp.spawnInterval,
     stageClearTimer: 0,
     clearedBannerStage: null,
+    bossIncomingTimer: 0,
+    bossActive: false,
   };
+}
+
+export function createFinalBoss(
+  viewportWidth: number,
+  viewportHeight: number
+): BossEnemy {
+  const safeW = Math.max(320, viewportWidth);
+  const safeH = Math.max(320, viewportHeight);
+  return {
+    x: safeW * 0.5,
+    y: Math.max(BOSS_RADIUS + 95, safeH * 0.24),
+    radius: BOSS_RADIUS,
+    hp: BOSS_MAX_HP,
+    maxHp: BOSS_MAX_HP,
+    phase: 'spread',
+    phaseTimer: BOSS_SPREAD_DURATION_SEC,
+    fireTimer: 0.85,
+    driftDir: 1,
+    chargeTargetX: safeW * 0.5,
+    chargeTargetY: safeH * 0.5,
+    chargeVx: 0,
+    chargeVy: 0,
+    hitFlashTimer: 0,
+    eyePulse: 0,
+  };
+}
+
+export function fireBossSpreadFan(
+  boss: BossEnemy,
+  playerX: number,
+  playerY: number,
+  enemyProjectiles: EnemyProjectile[]
+): void {
+  const baseAngle = Math.atan2(playerY - boss.y, playerX - boss.x);
+  const spawnDist = boss.radius + BOSS_PROJECTILE_RADIUS + 2;
+
+  for (let i = 0; i < BOSS_SPREAD_ANGLES.length; i += 1) {
+    const angle = baseAngle + BOSS_SPREAD_ANGLES[i];
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    enemyProjectiles.push({
+      x: boss.x + cos * spawnDist,
+      y: boss.y + sin * spawnDist,
+      vx: cos * BOSS_PROJECTILE_SPEED,
+      vy: sin * BOSS_PROJECTILE_SPEED,
+      radius: BOSS_PROJECTILE_RADIUS,
+      kind: 'boss',
+    });
+  }
+}
+
+export function stepBoss(
+  boss: BossEnemy,
+  enemyProjectiles: EnemyProjectile[],
+  playerX: number,
+  playerY: number,
+  dt: number,
+  viewportWidth: number,
+  viewportHeight: number
+): void {
+  boss.eyePulse += dt * 6;
+  if (boss.hitFlashTimer > 0) {
+    boss.hitFlashTimer = Math.max(0, boss.hitFlashTimer - dt);
+  }
+
+  const pad = boss.radius + 26;
+  const minX = pad;
+  const maxX = Math.max(minX, viewportWidth - pad);
+  const minY = Math.max(pad, 108);
+  const maxY = Math.max(minY, viewportHeight - pad);
+
+  if (boss.phase === 'spread') {
+    // Drift slowly horizontally and hover smoothly in upper/mid arena
+    boss.x += boss.driftDir * BOSS_DRIFT_SPEED * dt;
+    if (boss.x <= minX) {
+      boss.x = minX;
+      boss.driftDir = 1;
+    } else if (boss.x >= maxX) {
+      boss.x = maxX;
+      boss.driftDir = -1;
+    }
+
+    const desiredY = Math.min(maxY, Math.max(minY, viewportHeight * 0.25));
+    boss.y += (desiredY - boss.y) * Math.min(1, dt * 2.2);
+
+    boss.fireTimer -= dt;
+    if (boss.fireTimer <= 0) {
+      fireBossSpreadFan(boss, playerX, playerY, enemyProjectiles);
+      boss.fireTimer = BOSS_SPREAD_FIRE_INTERVAL;
+    }
+
+    boss.phaseTimer -= dt;
+    if (boss.phaseTimer <= 0) {
+      boss.phase = 'charge_windup';
+      boss.phaseTimer = BOSS_CHARGE_WINDUP_SEC;
+      boss.chargeTargetX = Math.max(minX, Math.min(maxX, playerX));
+      boss.chargeTargetY = Math.max(minY, Math.min(maxY, playerY));
+    }
+    return;
+  }
+
+  if (boss.phase === 'charge_windup') {
+    // Lock onto player's current position right before charging
+    boss.chargeTargetX = Math.max(minX, Math.min(maxX, playerX));
+    boss.chargeTargetY = Math.max(minY, Math.min(maxY, playerY));
+    boss.phaseTimer -= dt;
+
+    if (boss.phaseTimer <= 0) {
+      const dx = boss.chargeTargetX - boss.x;
+      const dy = boss.chargeTargetY - boss.y;
+      const dist = Math.hypot(dx, dy);
+      const nx = dist > 0.001 ? dx / dist : 0;
+      const ny = dist > 0.001 ? dy / dist : 1;
+
+      boss.chargeVx = nx * BOSS_CHARGE_SPEED;
+      boss.chargeVy = ny * BOSS_CHARGE_SPEED;
+      boss.phase = 'charge';
+      boss.phaseTimer = BOSS_CHARGE_MAX_SEC;
+    }
+    return;
+  }
+
+  // 'charge' phase: rush toward locked position at high speed, then return to spread
+  const stepX = boss.chargeVx * dt;
+  const stepY = boss.chargeVy * dt;
+  const remDx = boss.chargeTargetX - boss.x;
+  const remDy = boss.chargeTargetY - boss.y;
+  const remDist = Math.hypot(remDx, remDy);
+  const stepDist = Math.hypot(stepX, stepY);
+
+  boss.phaseTimer -= dt;
+
+  if (remDist <= stepDist + 8 || boss.phaseTimer <= 0) {
+    boss.x = Math.max(minX, Math.min(maxX, boss.chargeTargetX));
+    boss.y = Math.max(minY, Math.min(maxY, boss.chargeTargetY));
+    boss.phase = 'spread';
+    boss.phaseTimer = BOSS_SPREAD_DURATION_SEC;
+    boss.fireTimer = 0.7;
+  } else {
+    boss.x = Math.max(minX, Math.min(maxX, boss.x + stepX));
+    boss.y = Math.max(minY, Math.min(maxY, boss.y + stepY));
+  }
 }
 
 export function getRusherSpeedForStage(stage: number): number {
@@ -283,7 +440,12 @@ export function stepEnemySpawning(
   playerY: number,
   rng: () => number = Math.random
 ): boolean {
-  if (wave.clearedBannerStage !== null || wave.spawnQueue.length === 0) {
+  if (
+    wave.bossActive ||
+    wave.bossIncomingTimer > 0 ||
+    wave.clearedBannerStage !== null ||
+    wave.spawnQueue.length === 0
+  ) {
     return false;
   }
 
@@ -369,7 +531,6 @@ export function stepEnemies(
       }
       enemy.wobblePhase += dt * 7.5;
     } else if (enemy.kind === 'blaster') {
-      // Kiter: keep distance between preferred min and max, strafe inside band
       let vx = 0;
       let vy = 0;
       if (dist > BLASTER_PREFERRED_MAX_DIST) {
@@ -379,7 +540,6 @@ export function stepEnemies(
         vx = -nx * enemy.speed;
         vy = -ny * enemy.speed;
       } else {
-        // Gentle orbital strafe around the player
         vx = -ny * enemy.strafeDir * enemy.speed * 0.68;
         vy = nx * enemy.strafeDir * enemy.speed * 0.68;
       }
@@ -402,7 +562,6 @@ export function stepEnemies(
         enemy.fireTimer = BLASTER_FIRE_INTERVAL;
       }
     } else {
-      // Drone: erratic wavy flight toward player + occasional faster aimed shot
       enemy.wobblePhase += dt * 5.2;
       const waveOffset =
         Math.sin(enemy.wobblePhase) + 0.45 * Math.cos(enemy.wobblePhase * 1.9);
@@ -458,6 +617,7 @@ export function stepEnemyProjectiles(
 export interface CollisionOutcome {
   enemiesDestroyed: number;
   playerHit: boolean;
+  bossDefeated: boolean;
   gameOver: boolean;
 }
 
@@ -466,12 +626,14 @@ export function resolveCombatCollisions(
   projectiles: Projectile[],
   enemies: Enemy[],
   enemyProjectiles: EnemyProjectile[],
-  onPopEffect?: (x: number, y: number, color: string) => void
+  onPopEffect?: (x: number, y: number, color: string) => void,
+  boss: BossEnemy | null = null
 ): CollisionOutcome {
   let enemiesDestroyed = 0;
   let playerHit = false;
+  let bossDefeated = false;
 
-  // 1. Player Projectile vs Enemy collisions
+  // 1. Player Projectile vs Regular Enemy collisions
   for (let ei = enemies.length - 1; ei >= 0; ei -= 1) {
     const enemy = enemies[ei];
     let destroyed = false;
@@ -522,6 +684,45 @@ export function resolveCombatCollisions(
     }
   }
 
+  // 2b. Player Projectile vs Boss & Boss vs Player contact
+  if (boss && boss.hp > 0) {
+    for (let pi = projectiles.length - 1; pi >= 0; pi -= 1) {
+      const proj = projectiles[pi];
+      const dx = proj.x - boss.x;
+      const dy = proj.y - boss.y;
+      const hitDist = proj.radius + boss.radius;
+
+      if (dx * dx + dy * dy <= hitDist * hitDist) {
+        projectiles.splice(pi, 1);
+        boss.hp = Math.max(0, boss.hp - 1);
+        boss.hitFlashTimer = 0.08;
+        onPopEffect?.(proj.x, proj.y, '#C084FC');
+
+        if (boss.hp <= 0) {
+          bossDefeated = true;
+          enemiesDestroyed += 1;
+          onPopEffect?.(boss.x, boss.y, '#FACC15');
+          break;
+        }
+      }
+    }
+
+    if (boss.hp > 0) {
+      const bdx = player.x - boss.x;
+      const bdy = player.y - boss.y;
+      const bossHitDist = player.radius + boss.radius - 5;
+
+      if (bdx * bdx + bdy * bdy <= bossHitDist * bossHitDist) {
+        if (player.shieldTimer <= 0 && player.invulnTimer <= 0) {
+          player.lives = Math.max(0, player.lives - 1);
+          player.invulnTimer = PLAYER_INVULN_SEC;
+          playerHit = true;
+          onPopEffect?.(player.x, player.y, '#EF4444');
+        }
+      }
+    }
+  }
+
   // 3. Enemy Projectile vs Player collision
   for (let bi = enemyProjectiles.length - 1; bi >= 0; bi -= 1) {
     const bullet = enemyProjectiles[bi];
@@ -546,6 +747,7 @@ export function resolveCombatCollisions(
   return {
     enemiesDestroyed,
     playerHit,
+    bossDefeated,
     gameOver: player.lives <= 0,
   };
 }
@@ -554,20 +756,31 @@ export type StageStepEvent =
   | { type: 'none' }
   | { type: 'stage_cleared'; clearedStage: number }
   | { type: 'stage_started'; nextStage: number }
-  | { type: 'all_stages_cleared' };
+  | { type: 'boss_incoming' }
+  | { type: 'boss_spawned' };
 
 export function stepStageProgression(
   wave: StageWaveState,
   enemies: Enemy[],
   dt: number
 ): StageStepEvent {
+  if (wave.bossActive) {
+    return { type: 'none' };
+  }
+
+  if (wave.bossIncomingTimer > 0) {
+    wave.bossIncomingTimer -= dt;
+    if (wave.bossIncomingTimer <= 0) {
+      wave.bossIncomingTimer = 0;
+      wave.bossActive = true;
+      return { type: 'boss_spawned' };
+    }
+    return { type: 'none' };
+  }
+
   if (wave.clearedBannerStage !== null) {
     wave.stageClearTimer -= dt;
     if (wave.stageClearTimer <= 0) {
-      if (wave.clearedBannerStage >= TOTAL_STAGES) {
-        wave.clearedBannerStage = null;
-        return { type: 'all_stages_cleared' };
-      }
       const nextStage = wave.clearedBannerStage + 1;
       const nextWave = createStageWaveState(nextStage);
       wave.stage = nextWave.stage;
@@ -582,6 +795,10 @@ export function stepStageProgression(
   }
 
   if (wave.spawnQueue.length === 0 && enemies.length === 0) {
+    if (wave.stage >= TOTAL_STAGES) {
+      wave.bossIncomingTimer = BOSS_INCOMING_BANNER_SEC;
+      return { type: 'boss_incoming' };
+    }
     wave.clearedBannerStage = wave.stage;
     wave.stageClearTimer = STAGE_CLEAR_BANNER_SEC;
     return { type: 'stage_cleared', clearedStage: wave.stage };

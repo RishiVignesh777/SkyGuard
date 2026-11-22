@@ -32,7 +32,7 @@ export function GameOverOverlay({
             isVictory ? 'text-amber-300' : 'text-red-400'
           }`}
         >
-          {isVictory ? 'ALL STAGES CLEARED!' : 'GAME OVER'}
+          {isVictory ? 'CITY SAVED' : 'GAME OVER'}
         </h2>
 
         <div className="mt-5 grid grid-cols-2 gap-3">
@@ -46,7 +46,7 @@ export function GameOverOverlay({
           </div>
           <div className="rounded-xl border-2 border-slate-700 bg-slate-900 px-3 py-2.5">
             <span className="block text-[11px] font-bold tracking-wider text-sky-200 uppercase">
-              Rushers Cleared
+              Foes Defeated
             </span>
             <span className="font-display text-xl font-black text-white tabular-nums">
               {enemiesDefeated}
@@ -60,7 +60,7 @@ export function GameOverOverlay({
           onClick={onRetry}
           className="mt-6 w-full cursor-pointer rounded-xl border-2 border-[#0F172A] bg-amber-300 px-6 py-3.5 font-display text-lg font-black tracking-wide text-[#0F172A] shadow-[0_5px_0_#000000] transition-transform duration-150 hover:bg-amber-200 active:translate-y-1 active:shadow-[0_2px_0_#000000] focus-visible:outline-4 focus-visible:outline-white whitespace-nowrap"
         >
-          {isVictory ? 'Press SPACE to play again.' : 'Press SPACE to try again.'}
+          {isVictory ? 'Press SPACE to run it again.' : 'Press SPACE to try again.'}
         </button>
       </div>
     </div>

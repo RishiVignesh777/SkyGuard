@@ -4,6 +4,7 @@ import {
   clampDeltaTime,
   clampPlayerPosition,
   computeAimAngle,
+  createFinalBoss,
   createInitialPlayerState,
   createParticlePool,
   createStageWaveState,
@@ -16,6 +17,7 @@ import {
   screenToCanvasCoords,
   spawnBurstParticles,
   stepAmbientWorld,
+  stepBoss,
   stepEnemies,
   stepEnemyProjectiles,
   stepEnemySpawning,
@@ -25,9 +27,11 @@ import {
   stepShieldState,
   stepShooting,
   stepStageProgression,
+  TOTAL_STAGES,
 } from '../game/engine';
 import { renderSkyguardScene, renderStaticBackdrop } from '../game/renderer';
 import type {
+  BossEnemy,
   CloudSpec,
   Enemy,
   EnemyProjectile,
@@ -42,38 +46,49 @@ import type {
 
 interface GameCanvasProps {
   gameState: GameState;
-  initialStage: number;
+  startStage: number;
+  startBossMode: boolean;
   runId: number;
   onLivesChange: (lives: number) => void;
   onStageChange: (stage: number) => void;
   onShieldChange: (status: ShieldStatus, timeRemaining: number) => void;
-  onStageClearedBannerChange: (clearedStage: number | null) => void;
+  onBannerMessageChange: (message: string | null) => void;
+  onBossChange: (boss: { hp: number; maxHp: number } | null) => void;
   onRunEnd: (outcome: GameOutcome, stageReached: number, defeated: number) => void;
 }
 
 export function GameCanvas({
   gameState,
-  initialStage,
+  startStage,
+  startBossMode,
   runId,
   onLivesChange,
   onStageChange,
   onShieldChange,
-  onStageClearedBannerChange,
+  onBannerMessageChange,
+  onBossChange,
   onRunEnd,
 }: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const gameStateRef = useRef<GameState>(gameState);
   const prevGameStateRef = useRef<GameState>(gameState);
-  const initialStageRef = useRef<number>(initialStage);
+  const startStageRef = useRef<number>(startStage);
+  const startBossModeRef = useRef<boolean>(startBossMode);
   const runIdRef = useRef<number>(runId);
   const prevRunIdRef = useRef<number>(runId);
+
+  // Sync scalar props directly so rAF immediately sees updated values on runId increment
+  startStageRef.current = startStage;
+  startBossModeRef.current = startBossMode;
+  runIdRef.current = runId;
 
   const callbacksRef = useRef({
     onLivesChange,
     onStageChange,
     onShieldChange,
-    onStageClearedBannerChange,
+    onBannerMessageChange,
+    onBossChange,
     onRunEnd,
   });
 
@@ -82,26 +97,20 @@ export function GameCanvas({
   }, [gameState]);
 
   useEffect(() => {
-    initialStageRef.current = initialStage;
-  }, [initialStage]);
-
-  useEffect(() => {
-    runIdRef.current = runId;
-  }, [runId]);
-
-  useEffect(() => {
     callbacksRef.current = {
       onLivesChange,
       onStageChange,
       onShieldChange,
-      onStageClearedBannerChange,
+      onBannerMessageChange,
+      onBossChange,
       onRunEnd,
     };
   }, [
     onLivesChange,
     onStageChange,
     onShieldChange,
-    onStageClearedBannerChange,
+    onBannerMessageChange,
+    onBossChange,
     onRunEnd,
   ]);
 
@@ -137,11 +146,23 @@ export function GameCanvas({
     const particles = createParticlePool(96);
     const particleCursorRef = { current: 0 };
     const nextEnemyIdRef = { current: 1 };
-    let wave: StageWaveState = createStageWaveState(initialStageRef.current);
+
+    const createWaveFromRefs = (): StageWaveState => {
+      const nextWave = createStageWaveState(startStageRef.current);
+      if (startBossModeRef.current && nextWave.stage === TOTAL_STAGES) {
+        nextWave.spawnQueue = [];
+        nextWave.spawnTimer = 0;
+      }
+      return nextWave;
+    };
+
+    let wave: StageWaveState = createWaveFromRefs();
+    let boss: BossEnemy | null = null;
     let enemiesDefeated = 0;
     let lastReportedLives = player.lives;
     let lastReportedStage = wave.stage;
-    let lastReportedBanner: number | null = null;
+    let lastReportedBanner: string | null = null;
+    let lastReportedBossHp: number | null = null;
     let lastReportedShieldStatus: ShieldStatus = 'READY';
     let lastReportedShieldTime = 0;
 
@@ -161,10 +182,11 @@ export function GameCanvas({
       projectiles.length = 0;
       enemies.length = 0;
       enemyProjectiles.length = 0;
+      boss = null;
       for (let i = 0; i < particles.length; i += 1) {
         particles[i].active = false;
       }
-      wave = createStageWaveState(initialStageRef.current);
+      wave = createWaveFromRefs();
       enemiesDefeated = 0;
       clearHeldInputs();
 
@@ -178,7 +200,11 @@ export function GameCanvas({
       }
       if (lastReportedBanner !== null) {
         lastReportedBanner = null;
-        callbacksRef.current.onStageClearedBannerChange(null);
+        callbacksRef.current.onBannerMessageChange(null);
+      }
+      if (lastReportedBossHp !== null) {
+        lastReportedBossHp = null;
+        callbacksRef.current.onBossChange(null);
       }
       if (lastReportedShieldStatus !== 'READY' || lastReportedShieldTime !== 0) {
         lastReportedShieldStatus = 'READY';
@@ -392,6 +418,17 @@ export function GameCanvas({
           width,
           height
         );
+        if (boss && boss.hp > 0) {
+          stepBoss(
+            boss,
+            enemyProjectiles,
+            player.x,
+            player.y,
+            dt,
+            width,
+            height
+          );
+        }
         stepEnemyProjectiles(enemyProjectiles, dt, width, height);
 
         const combat = resolveCombatCollisions(
@@ -400,7 +437,8 @@ export function GameCanvas({
           enemies,
           enemyProjectiles,
           (px, py, color) =>
-            spawnBurstParticles(particles, particleCursorRef, px, py, color, 10)
+            spawnBurstParticles(particles, particleCursorRef, px, py, color, 10),
+          boss
         );
         enemiesDefeated += combat.enemiesDestroyed;
 
@@ -426,28 +464,49 @@ export function GameCanvas({
           clearHeldInputs();
           if (lastReportedBanner !== null) {
             lastReportedBanner = null;
-            callbacksRef.current.onStageClearedBannerChange(null);
+            callbacksRef.current.onBannerMessageChange(null);
           }
           callbacksRef.current.onRunEnd('defeat', wave.stage, enemiesDefeated);
+        } else if (combat.bossDefeated) {
+          clearHeldInputs();
+          boss = null;
+          if (lastReportedBossHp !== null) {
+            lastReportedBossHp = null;
+            callbacksRef.current.onBossChange(null);
+          }
+          if (lastReportedBanner !== null) {
+            lastReportedBanner = null;
+            callbacksRef.current.onBannerMessageChange(null);
+          }
+          callbacksRef.current.onRunEnd('victory', wave.stage, enemiesDefeated);
         } else {
+          if (boss && boss.hp !== lastReportedBossHp) {
+            lastReportedBossHp = boss.hp;
+            callbacksRef.current.onBossChange({ hp: boss.hp, maxHp: boss.maxHp });
+          }
+
           const stageEvent = stepStageProgression(wave, enemies, dt);
           if (stageEvent.type === 'stage_cleared') {
-            lastReportedBanner = stageEvent.clearedStage;
-            callbacksRef.current.onStageClearedBannerChange(
-              stageEvent.clearedStage
-            );
+            const msg = `STAGE ${stageEvent.clearedStage} CLEARED!`;
+            lastReportedBanner = msg;
+            callbacksRef.current.onBannerMessageChange(msg);
           } else if (stageEvent.type === 'stage_started') {
             lastReportedBanner = null;
-            callbacksRef.current.onStageClearedBannerChange(null);
+            callbacksRef.current.onBannerMessageChange(null);
             if (lastReportedStage !== stageEvent.nextStage) {
               lastReportedStage = stageEvent.nextStage;
               callbacksRef.current.onStageChange(stageEvent.nextStage);
             }
-          } else if (stageEvent.type === 'all_stages_cleared') {
-            clearHeldInputs();
+          } else if (stageEvent.type === 'boss_incoming') {
+            const msg = 'FINAL BOSS INCOMING';
+            lastReportedBanner = msg;
+            callbacksRef.current.onBannerMessageChange(msg);
+          } else if (stageEvent.type === 'boss_spawned') {
             lastReportedBanner = null;
-            callbacksRef.current.onStageClearedBannerChange(null);
-            callbacksRef.current.onRunEnd('victory', wave.stage, enemiesDefeated);
+            callbacksRef.current.onBannerMessageChange(null);
+            boss = createFinalBoss(width, height);
+            lastReportedBossHp = boss.hp;
+            callbacksRef.current.onBossChange({ hp: boss.hp, maxHp: boss.maxHp });
           }
         }
       }
@@ -463,6 +522,10 @@ export function GameCanvas({
       const stageStr = String(wave.stage);
       const shieldSnapNow = getShieldSnapshot(player);
       const shieldStatusStr = shieldSnapNow.status;
+      const bossHpStr = boss ? String(boss.hp) : '';
+      const bossPhaseStr = boss ? boss.phase : '';
+      const bossXStr = boss ? String(Math.round(boss.x)) : '';
+      const bossYStr = boss ? String(Math.round(boss.y)) : '';
 
       if (canvas.dataset.heroX !== heroXStr) canvas.dataset.heroX = heroXStr;
       if (canvas.dataset.heroY !== heroYStr) canvas.dataset.heroY = heroYStr;
@@ -476,6 +539,11 @@ export function GameCanvas({
       if (canvas.dataset.stage !== stageStr) canvas.dataset.stage = stageStr;
       if (canvas.dataset.shieldStatus !== shieldStatusStr)
         canvas.dataset.shieldStatus = shieldStatusStr;
+      if (canvas.dataset.bossHp !== bossHpStr) canvas.dataset.bossHp = bossHpStr;
+      if (canvas.dataset.bossPhase !== bossPhaseStr)
+        canvas.dataset.bossPhase = bossPhaseStr;
+      if (canvas.dataset.bossX !== bossXStr) canvas.dataset.bossX = bossXStr;
+      if (canvas.dataset.bossY !== bossYStr) canvas.dataset.bossY = bossYStr;
 
       if (needsRender) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -490,6 +558,7 @@ export function GameCanvas({
           enemies,
           enemyProjectiles,
           particles,
+          boss,
         });
         needsRender = false;
       }

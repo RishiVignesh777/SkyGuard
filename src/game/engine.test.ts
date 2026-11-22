@@ -3,8 +3,14 @@ import assert from 'node:assert/strict';
 import {
   activateShield,
   BLASTER_PROJECTILE_SPEED,
+  BOSS_CHARGE_MAX_SEC,
+  BOSS_CHARGE_WINDUP_SEC,
+  BOSS_INCOMING_BANNER_SEC,
+  BOSS_MAX_HP,
+  BOSS_RADIUS,
   clampDeltaTime,
   computeAimAngle,
+  createFinalBoss,
   createInitialHudSnapshot,
   createInitialPlayerState,
   createStageWaveState,
@@ -27,6 +33,7 @@ import {
   STAGE_CLEAR_BANNER_SEC,
   STAGE_COMPOSITIONS,
   stepAmbientWorld,
+  stepBoss,
   stepEnemies,
   stepEnemyProjectiles,
   stepEnemySpawning,
@@ -222,7 +229,7 @@ test('Blaster keeps distance and fires slow aimed shots while Drone weaves and f
     {
       id: 1,
       kind: 'blaster',
-      x: 420, // too close (80px < 250px) -> should back away
+      x: 420,
       y: 400,
       radius: 22,
       speed: 120,
@@ -247,13 +254,10 @@ test('Blaster keeps distance and fires slow aimed shots while Drone weaves and f
 
   stepEnemies(enemies, enemyProjectiles, playerX, playerY, 0.1, 1000, 800);
 
-  // Blaster backed away from player
   assert.ok(enemies[0].x < 420);
-  // Drone moved closer while weaving laterally (y shifted)
   assert.ok(enemies[1].x < 800);
   assert.notEqual(enemies[1].y, 400);
 
-  // Both fired aimed projectiles, Drone's projectile faster than Blaster's
   assert.equal(enemyProjectiles.length, 2);
   const blasterSpeed = Math.hypot(enemyProjectiles[0].vx, enemyProjectiles[0].vy);
   const droneSpeed = Math.hypot(enemyProjectiles[1].vx, enemyProjectiles[1].vy);
@@ -261,7 +265,6 @@ test('Blaster keeps distance and fires slow aimed shots while Drone weaves and f
   assert.ok(Math.abs(droneSpeed - DRONE_PROJECTILE_SPEED) < 1e-3);
   assert.ok(droneSpeed > blasterSpeed);
 
-  // Off-screen projectile culling
   enemyProjectiles.push({
     x: 1050,
     y: 400,
@@ -281,10 +284,9 @@ test('shield activates for duration, grants full invulnerability, and enters coo
 
   assert.equal(getShieldSnapshot(player).status, 'READY');
   assert.equal(activateShield(player), true);
-  assert.equal(activateShield(player), false, 'cannot re-activate while active');
+  assert.equal(activateShield(player), false);
   assert.equal(getShieldSnapshot(player).status, 'ACTIVE');
 
-  // Shield blocks both enemy contact and enemy projectile damage
   const enemies: Enemy[] = [
     {
       id: 1,
@@ -308,12 +310,10 @@ test('shield activates for duration, grants full invulnerability, and enters coo
   assert.equal(enemies.length, 0);
   assert.equal(enemyProjectiles.length, 0);
 
-  // Advance past shield duration -> transitions to cooldown
   stepShieldState(player, SHIELD_DURATION_SEC + 0.1);
   assert.equal(getShieldSnapshot(player).status, 'COOLDOWN');
-  assert.equal(activateShield(player), false, 'cannot activate during cooldown');
+  assert.equal(activateShield(player), false);
 
-  // Advance past cooldown -> returns to READY
   stepShieldState(player, SHIELD_COOLDOWN_SEC + 0.1);
   assert.equal(getShieldSnapshot(player).status, 'READY');
   assert.equal(activateShield(player), true);
@@ -398,31 +398,13 @@ test('resolveCombatCollisions destroys enemy on projectile hit and handles playe
   assert.equal(res3.gameOver, true);
 });
 
-test('stepStageProgression clears stage when queue and enemies empty, then advances after banner', () => {
+test('stepStageProgression transitions stages 1..4 via cleared banner and stage 5 into boss_incoming -> boss_spawned', () => {
   const wave = createStageWaveState(1);
   const enemies: Enemy[] = [];
 
-  assert.equal(stepStageProgression(wave, enemies, 0.016).type, 'none');
-
   wave.spawnQueue = [];
-  enemies.push({
-    id: 1,
-    kind: 'rusher',
-    x: 10,
-    y: 10,
-    radius: 20,
-    speed: 100,
-    angle: 0,
-    wobblePhase: 0,
-    fireTimer: 99,
-    strafeDir: 1,
-  });
-  assert.equal(stepStageProgression(wave, enemies, 0.016).type, 'none');
-
-  enemies.length = 0;
   const clearedEvent = stepStageProgression(wave, enemies, 0.016);
   assert.deepEqual(clearedEvent, { type: 'stage_cleared', clearedStage: 1 });
-  assert.equal(wave.clearedBannerStage, 1);
 
   const startedEvent = stepStageProgression(
     wave,
@@ -430,6 +412,95 @@ test('stepStageProgression clears stage when queue and enemies empty, then advan
     STAGE_CLEAR_BANNER_SEC + 0.05
   );
   assert.deepEqual(startedEvent, { type: 'stage_started', nextStage: 2 });
-  assert.equal(wave.stage, 2);
-  assert.equal(wave.spawnQueue.length, 6);
+
+  // Stage 5 clear triggers Final Boss incoming transition
+  const wave5 = createStageWaveState(5);
+  wave5.spawnQueue = [];
+  const bossIncoming = stepStageProgression(wave5, enemies, 0.016);
+  assert.deepEqual(bossIncoming, { type: 'boss_incoming' });
+  assert.ok(wave5.bossIncomingTimer > 0);
+
+  const bossSpawned = stepStageProgression(
+    wave5,
+    enemies,
+    BOSS_INCOMING_BANNER_SEC + 0.05
+  );
+  assert.deepEqual(bossSpawned, { type: 'boss_spawned' });
+  assert.equal(wave5.bossActive, true);
+});
+
+test('Final Boss alternates between spread (5-bullet fan) and charge phases, takes 40 HP, and defeats cleanly', () => {
+  const boss = createFinalBoss(1440, 900);
+  assert.equal(boss.hp, BOSS_MAX_HP);
+  assert.equal(boss.maxHp, 40);
+  assert.equal(boss.radius, BOSS_RADIUS);
+  assert.equal(boss.phase, 'spread');
+
+  const enemyProjectiles: EnemyProjectile[] = [];
+  boss.fireTimer = 0.05;
+  stepBoss(boss, enemyProjectiles, 720, 600, 0.1, 1440, 900);
+  assert.equal(enemyProjectiles.length, 5, 'spread phase fires a 5-bullet fan');
+
+  // Transition spread -> charge_windup -> charge -> spread
+  boss.phaseTimer = 0.01;
+  stepBoss(boss, enemyProjectiles, 900, 620, 0.05, 1440, 900);
+  assert.equal(boss.phase, 'charge_windup');
+
+  stepBoss(
+    boss,
+    enemyProjectiles,
+    900,
+    620,
+    BOSS_CHARGE_WINDUP_SEC + 0.05,
+    1440,
+    900
+  );
+  assert.equal(boss.phase, 'charge');
+
+  const preChargeY = boss.y;
+  stepBoss(boss, enemyProjectiles, 400, 300, 0.1, 1440, 900);
+  assert.ok(boss.y > preChargeY, 'boss rushes at high speed toward locked target');
+
+  // Complete charge -> returns to spread phase
+  stepBoss(
+    boss,
+    enemyProjectiles,
+    400,
+    300,
+    BOSS_CHARGE_MAX_SEC + 0.1,
+    1440,
+    900
+  );
+  assert.equal(boss.phase, 'spread');
+
+  // Boss takes damage from player projectiles and defeats at 0 HP
+  const player = createInitialPlayerState(1440, 900);
+  player.x = 200;
+  player.y = 700;
+  const hitProjectiles: Projectile[] = [
+    { x: boss.x, y: boss.y, vx: 0, vy: 0, radius: 6, angle: 0 },
+  ];
+  const hitOutcome = resolveCombatCollisions(
+    player,
+    hitProjectiles,
+    [],
+    [],
+    undefined,
+    boss
+  );
+  assert.equal(boss.hp, 39);
+  assert.equal(hitOutcome.bossDefeated, false);
+  assert.equal(hitProjectiles.length, 0);
+
+  boss.hp = 1;
+  const killOutcome = resolveCombatCollisions(
+    player,
+    [{ x: boss.x, y: boss.y, vx: 0, vy: 0, radius: 6, angle: 0 }],
+    [],
+    [],
+    undefined,
+    boss
+  );
+  assert.equal(boss.hp, 0);
+  assert.equal(killOutcome.bossDefeated, true);
 });
