@@ -13,6 +13,7 @@ import {
   generateClouds,
   getShieldSnapshot,
   getStationaryHeroGeometry,
+  isLowLifeWarningActive,
   resolveCombatCollisions,
   screenToCanvasCoords,
   spawnBurstParticles,
@@ -397,6 +398,8 @@ export function GameCanvas({
         needsRender = true;
       }
 
+      let runEndedThisFrame = false;
+
       if (currentState === 'playing') {
         stepPlayerMovement(player, readMovementInput(), dt, width, height);
         stepShieldState(player, dt);
@@ -484,6 +487,7 @@ export function GameCanvas({
         }
 
         if (combat.gameOver) {
+          runEndedThisFrame = true;
           clearHeldInputs();
           if (lastReportedBanner !== null) {
             lastReportedBanner = null;
@@ -496,6 +500,7 @@ export function GameCanvas({
             score
           );
         } else if (combat.bossDefeated) {
+          runEndedThisFrame = true;
           clearHeldInputs();
           boss = null;
           if (lastReportedBossHp !== null) {
@@ -544,6 +549,11 @@ export function GameCanvas({
         }
       }
 
+      const lowLifeWarning = isLowLifeWarningActive(
+        player.lives,
+        runEndedThisFrame ? 'gameover' : currentState
+      );
+
       const heroXStr = String(Math.round(player.x));
       const heroYStr = String(Math.round(player.y));
       const aimStr = player.aimAngle.toFixed(2);
@@ -560,6 +570,7 @@ export function GameCanvas({
       const bossPhaseStr = boss ? boss.phase : '';
       const bossXStr = boss ? String(Math.round(boss.x)) : '';
       const bossYStr = boss ? String(Math.round(boss.y)) : '';
+      const lowLifeStr = lowLifeWarning ? '1' : '0';
 
       if (canvas.dataset.heroX !== heroXStr) canvas.dataset.heroX = heroXStr;
       if (canvas.dataset.heroY !== heroYStr) canvas.dataset.heroY = heroYStr;
@@ -579,6 +590,8 @@ export function GameCanvas({
         canvas.dataset.bossPhase = bossPhaseStr;
       if (canvas.dataset.bossX !== bossXStr) canvas.dataset.bossX = bossXStr;
       if (canvas.dataset.bossY !== bossYStr) canvas.dataset.bossY = bossYStr;
+      if (canvas.dataset.lowLifeWarning !== lowLifeStr)
+        canvas.dataset.lowLifeWarning = lowLifeStr;
 
       if (needsRender) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -594,6 +607,7 @@ export function GameCanvas({
           enemyProjectiles,
           particles,
           boss,
+          lowLifeWarning,
         });
         needsRender = false;
       }

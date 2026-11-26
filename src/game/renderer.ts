@@ -1,4 +1,4 @@
-import { DEFAULT_AIM_ANGLE } from './engine';
+import { DEFAULT_AIM_ANGLE, getHeroCapeColors } from './engine';
 import type {
   BossEnemy,
   BurstParticle,
@@ -28,6 +28,7 @@ export interface DynamicSceneParams {
   enemyProjectiles: EnemyProjectile[];
   particles: BurstParticle[];
   boss?: BossEnemy | null;
+  lowLifeWarning?: boolean;
 }
 
 export function renderStaticBackdrop(
@@ -55,6 +56,7 @@ export function renderSkyguardScene(
     enemyProjectiles,
     particles,
     boss,
+    lowLifeWarning = false,
   } = params;
 
   ctx.drawImage(backdropCanvas, 0, 0, width, height);
@@ -66,7 +68,7 @@ export function renderSkyguardScene(
   if (boss && boss.hp > 0) {
     drawBoss(ctx, boss, player.x, player.y, elapsedTime);
   }
-  drawHero(ctx, player, elapsedTime);
+  drawHero(ctx, player, elapsedTime, lowLifeWarning);
 }
 
 function drawSkyBackground(
@@ -670,7 +672,8 @@ function drawBoss(
 function drawHero(
   ctx: CanvasRenderingContext2D,
   player: PlayerState,
-  elapsedTime: number
+  elapsedTime: number,
+  lowLifeWarning = false
 ): void {
   const { x, y, radius, aimAngle, invulnTimer, shieldTimer } = player;
 
@@ -678,6 +681,11 @@ function drawHero(
     shieldTimer <= 0 &&
     invulnTimer > 0 &&
     Math.floor(invulnTimer * 16) % 2 === 0;
+  const capeColors = getHeroCapeColors({
+    isFlashingWhite,
+    lowLifeActive: lowLifeWarning,
+    elapsedTime,
+  });
   const flutter = Math.sin(elapsedTime * 5.2) * (radius * 0.14);
   const secondaryFlutter = Math.cos(elapsedTime * 3.8) * (radius * 0.08);
 
@@ -695,38 +703,52 @@ function drawHero(
   ctx.save();
   ctx.rotate(aimAngle - DEFAULT_AIM_ANGLE);
 
-  // Red cartoon cape
-  ctx.fillStyle = isFlashingWhite ? '#FCA5A5' : '#EF4444';
+  // Red cartoon cape (slow bright-red pulse when down to last life)
+  const buildCapePath = () => {
+    ctx.beginPath();
+    ctx.moveTo(-radius * 0.82, radius * 0.12);
+    ctx.quadraticCurveTo(
+      -radius * 1.24 + secondaryFlutter,
+      radius * 1.12,
+      -radius * 0.9 + flutter,
+      radius * 1.85
+    );
+    ctx.quadraticCurveTo(flutter * 0.6, radius * 1.56, 0, radius * 1.76);
+    ctx.quadraticCurveTo(
+      radius * 0.45 + flutter * 0.4,
+      radius * 1.56,
+      radius * 0.9 + flutter,
+      radius * 1.85
+    );
+    ctx.quadraticCurveTo(
+      radius * 1.24 - secondaryFlutter,
+      radius * 1.12,
+      radius * 0.82,
+      radius * 0.12
+    );
+    ctx.closePath();
+  };
+
+  if (capeColors.pulseStrength > 0.05) {
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 75, 75, ${(capeColors.pulseStrength * 0.55).toFixed(3)})`;
+    ctx.lineWidth = 9;
+    ctx.lineJoin = 'round';
+    buildCapePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.fillStyle = capeColors.mainFill;
   ctx.strokeStyle = '#0F172A';
   ctx.lineWidth = 3;
   ctx.lineJoin = 'round';
 
-  ctx.beginPath();
-  ctx.moveTo(-radius * 0.82, radius * 0.12);
-  ctx.quadraticCurveTo(
-    -radius * 1.24 + secondaryFlutter,
-    radius * 1.12,
-    -radius * 0.9 + flutter,
-    radius * 1.85
-  );
-  ctx.quadraticCurveTo(flutter * 0.6, radius * 1.56, 0, radius * 1.76);
-  ctx.quadraticCurveTo(
-    radius * 0.45 + flutter * 0.4,
-    radius * 1.56,
-    radius * 0.9 + flutter,
-    radius * 1.85
-  );
-  ctx.quadraticCurveTo(
-    radius * 1.24 - secondaryFlutter,
-    radius * 1.12,
-    radius * 0.82,
-    radius * 0.12
-  );
-  ctx.closePath();
+  buildCapePath();
   ctx.fill();
   ctx.stroke();
 
-  ctx.fillStyle = isFlashingWhite ? '#F87171' : '#B91C1C';
+  ctx.fillStyle = capeColors.shadowFill;
   ctx.beginPath();
   ctx.moveTo(-radius * 0.4, radius * 0.45);
   ctx.quadraticCurveTo(

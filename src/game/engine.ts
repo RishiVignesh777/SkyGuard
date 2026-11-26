@@ -1138,3 +1138,50 @@ export function stepAmbientWorld(
 
   return elapsedSec + dt;
 }
+
+export function isLowLifeWarningActive(
+  lives: number,
+  gameState: GameState
+): boolean {
+  return gameState === 'playing' && lives === 1;
+}
+
+export function getLowLifePulseStrength(elapsedSec: number): number {
+  return (1 - Math.cos(elapsedSec * Math.PI * 1.8)) * 0.5;
+}
+
+export function getHeroCapeColors(options: {
+  isFlashingWhite: boolean;
+  lowLifeActive: boolean;
+  elapsedTime: number;
+}): { mainFill: string; shadowFill: string; pulseStrength: number } {
+  if (options.isFlashingWhite) {
+    return {
+      mainFill: '#FCA5A5',
+      shadowFill: '#F87171',
+      pulseStrength: 0,
+    };
+  }
+  if (!options.lowLifeActive) {
+    return {
+      mainFill: '#EF4444',
+      shadowFill: '#B91C1C',
+      pulseStrength: 0,
+    };
+  }
+
+  const pulse = getLowLifePulseStrength(options.elapsedTime);
+  const lerpChannel = (a: number, b: number) => Math.round(a + (b - a) * pulse);
+  const mainR = lerpChannel(239, 255);
+  const mainG = lerpChannel(68, 118);
+  const mainB = lerpChannel(68, 118);
+  const shadowR = lerpChannel(185, 255);
+  const shadowG = lerpChannel(28, 62);
+  const shadowB = lerpChannel(28, 62);
+
+  return {
+    mainFill: `rgb(${mainR}, ${mainG}, ${mainB})`,
+    shadowFill: `rgb(${shadowR}, ${shadowG}, ${shadowB})`,
+    pulseStrength: pulse,
+  };
+}

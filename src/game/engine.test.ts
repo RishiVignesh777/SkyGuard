@@ -17,11 +17,14 @@ import {
   DRONE_PROJECTILE_SPEED,
   generateCitySkyline,
   generateClouds,
+  getHeroCapeColors,
+  getLowLifePulseStrength,
   getScoreForEnemyKind,
   getShieldSnapshot,
   getStationaryHeroGeometry,
   HERO_EDGE_MARGIN,
   HERO_MOVE_SPEED,
+  isLowLifeWarningActive,
   MAX_DELTA_TIME_SEC,
   pickEdgeSpawnPoint,
   PLAYER_INVULN_SEC,
@@ -619,4 +622,39 @@ test('resolveCombatCollisions awards 10 for rushers, 15 for blasters, 20 for dro
   );
   assert.equal(hitOutcome.playerHit, true);
   assert.equal(hitOutcome.scoreEarned, 0);
+});
+
+test('low-life warning flashes brighter red cape only on last life while playing and stops on heal or run end', () => {
+  assert.equal(isLowLifeWarningActive(3, 'playing'), false);
+  assert.equal(isLowLifeWarningActive(2, 'playing'), false);
+  assert.equal(isLowLifeWarningActive(1, 'playing'), true);
+  assert.equal(isLowLifeWarningActive(0, 'playing'), false);
+  // Stops immediately when run ends (defeat or victory while on 1 life)
+  assert.equal(isLowLifeWarningActive(1, 'gameover'), false);
+  assert.equal(isLowLifeWarningActive(1, 'title'), false);
+  assert.equal(isLowLifeWarningActive(1, 'paused'), false);
+  // Stops immediately if lives increase
+  assert.equal(isLowLifeWarningActive(2, 'playing'), false);
+
+  const trough = getLowLifePulseStrength(0);
+  const peak = getLowLifePulseStrength(1 / 1.8);
+  assert.ok(Math.abs(trough) < 1e-6);
+  assert.ok(Math.abs(peak - 1) < 1e-6);
+
+  const inactiveCape = getHeroCapeColors({
+    isFlashingWhite: false,
+    lowLifeActive: false,
+    elapsedTime: 1 / 1.8,
+  });
+  assert.equal(inactiveCape.mainFill, '#EF4444');
+  assert.equal(inactiveCape.pulseStrength, 0);
+
+  const warningPeakCape = getHeroCapeColors({
+    isFlashingWhite: false,
+    lowLifeActive: true,
+    elapsedTime: 1 / 1.8,
+  });
+  assert.equal(warningPeakCape.mainFill, 'rgb(255, 118, 118)');
+  assert.equal(warningPeakCape.shadowFill, 'rgb(255, 62, 62)');
+  assert.ok(warningPeakCape.pulseStrength > 0.99);
 });
