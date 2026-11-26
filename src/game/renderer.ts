@@ -530,22 +530,26 @@ function drawBoss(
   const isFlashing = boss.hitFlashTimer > 0;
   const isWindup = boss.phase === 'charge_windup';
   const isCharging = boss.phase === 'charge';
+  const windupPulse = isWindup ? (Math.sin(elapsedTime * 38) + 1) * 0.5 : 0;
+  const isWindupFlashPeak = isWindup && windupPulse > 0.45;
 
   // Charge windup sightline telegraph so player can read the rush target
   if (isWindup) {
     ctx.save();
-    ctx.strokeStyle = 'rgba(251, 113, 133, 0.65)';
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = isWindupFlashPeak
+      ? 'rgba(253, 224, 71, 0.85)'
+      : 'rgba(251, 113, 133, 0.72)';
+    ctx.lineWidth = 4.5;
     ctx.setLineDash([12, 10]);
     ctx.beginPath();
     ctx.moveTo(boss.x, boss.y);
     ctx.lineTo(boss.chargeTargetX, boss.chargeTargetY);
     ctx.stroke();
 
-    const pulseR = 16 + Math.sin(elapsedTime * 18) * 4;
+    const pulseR = 16 + windupPulse * 6;
     ctx.setLineDash([]);
-    ctx.strokeStyle = '#FB7185';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = isWindupFlashPeak ? '#FDE047' : '#FB7185';
+    ctx.lineWidth = 3.2;
     ctx.beginPath();
     ctx.arc(boss.chargeTargetX, boss.chargeTargetY, pulseR, 0, Math.PI * 2);
     ctx.stroke();
@@ -561,19 +565,33 @@ function drawBoss(
   ctx.ellipse(0, r * 1.12, r * 0.96, r * 0.28, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Pulsing aura during windup / charge
-  if (isWindup || isCharging) {
+  // Intense pulsing warning glow during 0.4s charge wind-up & charge rush
+  if (isWindup) {
+    const outerRadius = r * (1.28 + windupPulse * 0.16);
+    ctx.fillStyle = `rgba(251, 113, 133, ${(0.28 + windupPulse * 0.28).toFixed(2)})`;
+    ctx.beginPath();
+    ctx.arc(0, 0, outerRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = isWindupFlashPeak ? '#FEF08A' : '#FB7185';
+    ctx.lineWidth = 4.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * (1.13 + windupPulse * 0.08), 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (isCharging) {
     const auraScale = 1.18 + Math.sin(elapsedTime * 20) * 0.06;
-    ctx.fillStyle = isCharging
-      ? 'rgba(244, 63, 94, 0.26)'
-      : 'rgba(250, 204, 21, 0.24)';
+    ctx.fillStyle = 'rgba(244, 63, 94, 0.28)';
     ctx.beginPath();
     ctx.arc(0, 0, r * auraScale, 0, Math.PI * 2);
     ctx.fill();
   }
 
   // Menacing horned crown / shoulder spikes
-  ctx.fillStyle = isFlashing ? '#F3E8FF' : '#3B0764';
+  ctx.fillStyle = isFlashing
+    ? '#F3E8FF'
+    : isWindupFlashPeak
+      ? '#7E22CE'
+      : '#3B0764';
   ctx.strokeStyle = '#0F172A';
   ctx.lineWidth = 3.5;
   ctx.lineJoin = 'round';
@@ -595,23 +613,39 @@ function drawBoss(
     ctx.stroke();
   }
 
-  // Main dark purple armored body
-  ctx.fillStyle = isFlashing ? '#F5F3FF' : '#4C1D95';
-  ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 3.8;
+  // Main dark purple armored body (flashes brighter violet/crimson during windup)
+  ctx.fillStyle = isFlashing
+    ? '#F5F3FF'
+    : isWindupFlashPeak
+      ? '#9333EA'
+      : isWindup
+        ? '#6D28D9'
+        : '#4C1D95';
+  ctx.strokeStyle = isWindupFlashPeak ? '#FEF08A' : '#0F172A';
+  ctx.lineWidth = isWindup ? 4.4 : 3.8;
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
 
   // Inner armor crest highlight
-  ctx.fillStyle = isFlashing ? '#FFFFFF' : '#6D28D9';
+  ctx.fillStyle = isFlashing
+    ? '#FFFFFF'
+    : isWindupFlashPeak
+      ? '#D8B4FE'
+      : isWindup
+        ? '#A855F7'
+        : '#6D28D9';
   ctx.beginPath();
   ctx.ellipse(-r * 0.16, -r * 0.24, r * 0.64, r * 0.44, -0.25, 0, Math.PI * 2);
   ctx.fill();
 
   // Lower jaw / armor plate
-  ctx.fillStyle = isFlashing ? '#E9D5FF' : '#2E1065';
+  ctx.fillStyle = isFlashing
+    ? '#E9D5FF'
+    : isWindupFlashPeak
+      ? '#581C87'
+      : '#2E1065';
   ctx.strokeStyle = '#0F172A';
   ctx.lineWidth = 3;
   ctx.beginPath();
@@ -620,7 +654,11 @@ function drawBoss(
   ctx.stroke();
 
   // Armor vents on jaw plate
-  ctx.fillStyle = isWindup || isCharging ? '#FB7185' : '#A855F7';
+  ctx.fillStyle = isWindupFlashPeak
+    ? '#FEF08A'
+    : isWindup || isCharging
+      ? '#FB7185'
+      : '#A855F7';
   for (let vi = -1; vi <= 1; vi += 1) {
     ctx.fillRect(vi * r * 0.24 - 4, r * 0.3, 8, r * 0.2);
   }
@@ -631,10 +669,16 @@ function drawBoss(
     : Math.atan2(playerY - boss.y, playerX - boss.x);
   const lookX = Math.cos(lookAngle) * 3.5;
   const lookY = Math.sin(lookAngle) * 2.5;
-  const eyeGlow = isWindup || isCharging ? '#FB7185' : '#FDE047';
-  const eyeAura = isWindup || isCharging
-    ? 'rgba(251, 113, 133, 0.5)'
-    : 'rgba(253, 224, 71, 0.45)';
+  const eyeGlow = isWindupFlashPeak
+    ? '#FFFFFF'
+    : isWindup || isCharging
+      ? '#FB7185'
+      : '#FDE047';
+  const eyeAura = isWindup
+    ? 'rgba(254, 240, 138, 0.78)'
+    : isCharging
+      ? 'rgba(251, 113, 133, 0.5)'
+      : 'rgba(253, 224, 71, 0.45)';
 
   for (const side of [-1, 1] as const) {
     const ex = side * r * 0.34;
@@ -643,7 +687,7 @@ function drawBoss(
     // Eye outer glow
     ctx.fillStyle = eyeAura;
     ctx.beginPath();
-    ctx.arc(ex, ey, r * 0.24, 0, Math.PI * 2);
+    ctx.arc(ex, ey, r * (isWindup ? 0.34 : 0.24), 0, Math.PI * 2);
     ctx.fill();
 
     // Fierce angry angled eye socket (outer corner raised, inner corner lowered)

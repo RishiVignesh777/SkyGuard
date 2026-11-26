@@ -450,20 +450,20 @@ test('Final Boss alternates between spread (5-bullet fan) and charge phases, tak
   stepBoss(boss, enemyProjectiles, 720, 600, 0.1, 1440, 900);
   assert.equal(enemyProjectiles.length, 5, 'spread phase fires a 5-bullet fan');
 
-  // Transition spread -> charge_windup -> charge -> spread
+  // Transition spread -> charge_windup (0.4s stationary telegraph) -> charge -> spread
+  assert.equal(BOSS_CHARGE_WINDUP_SEC, 0.4);
   boss.phaseTimer = 0.01;
   stepBoss(boss, enemyProjectiles, 900, 620, 0.05, 1440, 900);
   assert.equal(boss.phase, 'charge_windup');
 
-  stepBoss(
-    boss,
-    enemyProjectiles,
-    900,
-    620,
-    BOSS_CHARGE_WINDUP_SEC + 0.05,
-    1440,
-    900
-  );
+  const windupStartX = boss.x;
+  const windupStartY = boss.y;
+  stepBoss(boss, enemyProjectiles, 900, 620, 0.2, 1440, 900);
+  assert.equal(boss.phase, 'charge_windup');
+  assert.equal(boss.x, windupStartX, 'boss movement pauses during windup');
+  assert.equal(boss.y, windupStartY, 'boss movement pauses during windup');
+
+  stepBoss(boss, enemyProjectiles, 900, 620, 0.25, 1440, 900);
   assert.equal(boss.phase, 'charge');
 
   const preChargeY = boss.y;
