@@ -9,6 +9,7 @@ export interface GameHudSnapshot {
   maxLives: number;
   stage: number;
   maxStages: number;
+  score: number;
   shieldStatus: ShieldStatus;
   shieldTimeRemaining: number;
 }

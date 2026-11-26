@@ -103,20 +103,33 @@ export function TopHud({ hud }: TopHudProps) {
           </div>
         </div>
 
-        {/* Center: Stage label */}
-        <div
-          data-testid="hud-stage"
-          className="shrink-0 justify-self-center rounded-xl border-2 border-[#0F172A] bg-[#0F172A] px-3 py-1.5 shadow-[0_4px_0_rgba(15,23,42,0.45)] sm:px-5 sm:py-2"
-        >
-          <span className="font-display text-sm font-black tracking-wide text-amber-300 tabular-nums sm:text-xl whitespace-nowrap">
+        {/* Center: Stage label and Score */}
+        <div className="flex shrink-0 items-center justify-self-center gap-2 rounded-xl border-2 border-[#0F172A] bg-[#0F172A] px-2.5 py-1.5 shadow-[0_4px_0_rgba(15,23,42,0.45)] sm:gap-4 sm:px-5 sm:py-2">
+          <span
+            data-testid="hud-stage"
+            className="font-display text-xs font-black tracking-wide text-amber-300 tabular-nums sm:text-xl whitespace-nowrap"
+          >
             STAGE {hud.stage} / {hud.maxStages}
           </span>
+          <span className="h-4 w-px bg-slate-700 sm:h-6" aria-hidden="true" />
+          <div
+            data-testid="hud-score"
+            aria-label={`Score: ${hud.score}`}
+            className="flex items-baseline gap-1 sm:gap-1.5 whitespace-nowrap"
+          >
+            <span className="text-[9px] font-bold tracking-wider text-sky-200 uppercase sm:text-[11px]">
+              Score
+            </span>
+            <span className="font-display text-xs font-black text-white tabular-nums sm:text-xl">
+              {hud.score}
+            </span>
+          </div>
         </div>
 
         {/* Right: Shield status readout */}
         <div
           data-testid="hud-shield"
-          className="flex min-w-[92px] shrink-0 items-center justify-self-end gap-2 rounded-xl border-2 border-[#0F172A] bg-[#0F172A] px-2.5 py-1.5 shadow-[0_4px_0_rgba(15,23,42,0.45)] sm:min-w-[116px] sm:gap-2.5 sm:px-3.5 sm:py-2"
+          className="flex min-w-[82px] shrink-0 items-center justify-self-end gap-2 rounded-xl border-2 border-[#0F172A] bg-[#0F172A] px-2.5 py-1.5 shadow-[0_4px_0_rgba(15,23,42,0.45)] sm:min-w-[116px] sm:gap-2.5 sm:px-3.5 sm:py-2"
           aria-label={shieldAria}
         >
           <ShieldIcon active={isActive} ready={isReady} />

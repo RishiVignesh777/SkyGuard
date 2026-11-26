@@ -59,10 +59,12 @@ export default function App() {
     outcome: GameOutcome;
     stageReached: number;
     enemiesDefeated: number;
+    score: number;
   }>({
     outcome: 'defeat',
     stageReached: 1,
     enemiesDefeated: 0,
+    score: 0,
   });
 
   useEffect(() => {
@@ -117,6 +119,10 @@ export default function App() {
     setHud((prev) => (prev.stage === stage ? prev : { ...prev, stage }));
   }, []);
 
+  const handleScoreChange = useCallback((score: number) => {
+    setHud((prev) => (prev.score === score ? prev : { ...prev, score }));
+  }, []);
+
   const handleShieldChange = useCallback(
     (shieldStatus: ShieldStatus, shieldTimeRemaining: number) => {
       setHud((prev) =>
@@ -130,8 +136,13 @@ export default function App() {
   );
 
   const handleRunEnd = useCallback(
-    (outcome: GameOutcome, stageReached: number, enemiesDefeated: number) => {
-      setEndSummary({ outcome, stageReached, enemiesDefeated });
+    (
+      outcome: GameOutcome,
+      stageReached: number,
+      enemiesDefeated: number,
+      score: number
+    ) => {
+      setEndSummary({ outcome, stageReached, enemiesDefeated, score });
       setGameState((prev) => transitionGameState(prev, 'GAME_OVER'));
     },
     []
@@ -190,6 +201,7 @@ export default function App() {
         runId={runId}
         onLivesChange={handleLivesChange}
         onStageChange={handleStageChange}
+        onScoreChange={handleScoreChange}
         onShieldChange={handleShieldChange}
         onBannerMessageChange={setBannerMessage}
         onBossChange={setBossHud}
@@ -218,6 +230,7 @@ export default function App() {
           stageReached={endSummary.stageReached}
           maxStages={hud.maxStages}
           enemiesDefeated={endSummary.enemiesDefeated}
+          score={endSummary.score}
           onRetry={handleRetry}
         />
       )}

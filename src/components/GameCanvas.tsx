@@ -51,10 +51,16 @@ interface GameCanvasProps {
   runId: number;
   onLivesChange: (lives: number) => void;
   onStageChange: (stage: number) => void;
+  onScoreChange: (score: number) => void;
   onShieldChange: (status: ShieldStatus, timeRemaining: number) => void;
   onBannerMessageChange: (message: string | null) => void;
   onBossChange: (boss: { hp: number; maxHp: number } | null) => void;
-  onRunEnd: (outcome: GameOutcome, stageReached: number, defeated: number) => void;
+  onRunEnd: (
+    outcome: GameOutcome,
+    stageReached: number,
+    defeated: number,
+    score: number
+  ) => void;
 }
 
 export function GameCanvas({
@@ -64,6 +70,7 @@ export function GameCanvas({
   runId,
   onLivesChange,
   onStageChange,
+  onScoreChange,
   onShieldChange,
   onBannerMessageChange,
   onBossChange,
@@ -86,6 +93,7 @@ export function GameCanvas({
   const callbacksRef = useRef({
     onLivesChange,
     onStageChange,
+    onScoreChange,
     onShieldChange,
     onBannerMessageChange,
     onBossChange,
@@ -100,6 +108,7 @@ export function GameCanvas({
     callbacksRef.current = {
       onLivesChange,
       onStageChange,
+      onScoreChange,
       onShieldChange,
       onBannerMessageChange,
       onBossChange,
@@ -108,6 +117,7 @@ export function GameCanvas({
   }, [
     onLivesChange,
     onStageChange,
+    onScoreChange,
     onShieldChange,
     onBannerMessageChange,
     onBossChange,
@@ -159,8 +169,10 @@ export function GameCanvas({
     let wave: StageWaveState = createWaveFromRefs();
     let boss: BossEnemy | null = null;
     let enemiesDefeated = 0;
+    let score = 0;
     let lastReportedLives = player.lives;
     let lastReportedStage = wave.stage;
+    let lastReportedScore = 0;
     let lastReportedBanner: string | null = null;
     let lastReportedBossHp: number | null = null;
     let lastReportedShieldStatus: ShieldStatus = 'READY';
@@ -188,6 +200,7 @@ export function GameCanvas({
       }
       wave = createWaveFromRefs();
       enemiesDefeated = 0;
+      score = 0;
       clearHeldInputs();
 
       if (lastReportedLives !== player.lives) {
@@ -197,6 +210,10 @@ export function GameCanvas({
       if (lastReportedStage !== wave.stage) {
         lastReportedStage = wave.stage;
         callbacksRef.current.onStageChange(wave.stage);
+      }
+      if (lastReportedScore !== 0) {
+        lastReportedScore = 0;
+        callbacksRef.current.onScoreChange(0);
       }
       if (lastReportedBanner !== null) {
         lastReportedBanner = null;
@@ -441,6 +458,12 @@ export function GameCanvas({
           boss
         );
         enemiesDefeated += combat.enemiesDestroyed;
+        score += combat.scoreEarned;
+
+        if (score !== lastReportedScore) {
+          lastReportedScore = score;
+          callbacksRef.current.onScoreChange(score);
+        }
 
         const shieldSnap = getShieldSnapshot(player);
         if (
@@ -466,7 +489,12 @@ export function GameCanvas({
             lastReportedBanner = null;
             callbacksRef.current.onBannerMessageChange(null);
           }
-          callbacksRef.current.onRunEnd('defeat', wave.stage, enemiesDefeated);
+          callbacksRef.current.onRunEnd(
+            'defeat',
+            wave.stage,
+            enemiesDefeated,
+            score
+          );
         } else if (combat.bossDefeated) {
           clearHeldInputs();
           boss = null;
@@ -478,7 +506,12 @@ export function GameCanvas({
             lastReportedBanner = null;
             callbacksRef.current.onBannerMessageChange(null);
           }
-          callbacksRef.current.onRunEnd('victory', wave.stage, enemiesDefeated);
+          callbacksRef.current.onRunEnd(
+            'victory',
+            wave.stage,
+            enemiesDefeated,
+            score
+          );
         } else {
           if (boss && boss.hp !== lastReportedBossHp) {
             lastReportedBossHp = boss.hp;
@@ -520,6 +553,7 @@ export function GameCanvas({
       const queueStr = String(wave.spawnQueue.length);
       const livesStr = String(player.lives);
       const stageStr = String(wave.stage);
+      const scoreStr = String(score);
       const shieldSnapNow = getShieldSnapshot(player);
       const shieldStatusStr = shieldSnapNow.status;
       const bossHpStr = boss ? String(boss.hp) : '';
@@ -537,6 +571,7 @@ export function GameCanvas({
       if (canvas.dataset.spawnQueue !== queueStr) canvas.dataset.spawnQueue = queueStr;
       if (canvas.dataset.lives !== livesStr) canvas.dataset.lives = livesStr;
       if (canvas.dataset.stage !== stageStr) canvas.dataset.stage = stageStr;
+      if (canvas.dataset.score !== scoreStr) canvas.dataset.score = scoreStr;
       if (canvas.dataset.shieldStatus !== shieldStatusStr)
         canvas.dataset.shieldStatus = shieldStatusStr;
       if (canvas.dataset.bossHp !== bossHpStr) canvas.dataset.bossHp = bossHpStr;

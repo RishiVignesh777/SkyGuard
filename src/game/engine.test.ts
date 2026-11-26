@@ -17,6 +17,7 @@ import {
   DRONE_PROJECTILE_SPEED,
   generateCitySkyline,
   generateClouds,
+  getScoreForEnemyKind,
   getShieldSnapshot,
   getStationaryHeroGeometry,
   HERO_EDGE_MARGIN,
@@ -27,6 +28,10 @@ import {
   PROJECTILE_SPEED,
   resolveCombatCollisions,
   RUSHER_RADIUS,
+  SCORE_BLASTER,
+  SCORE_BOSS,
+  SCORE_DRONE,
+  SCORE_RUSHER,
   SHIELD_COOLDOWN_SEC,
   SHIELD_DURATION_SEC,
   SHOT_COOLDOWN_SEC,
@@ -53,12 +58,13 @@ test('clampDeltaTime clamps negative, NaN, and oversized spikes', () => {
   assert.equal(clampDeltaTime(250), MAX_DELTA_TIME_SEC);
 });
 
-test('createInitialHudSnapshot provides Stage 1/5, 3 lives, and READY shield', () => {
+test('createInitialHudSnapshot provides Stage 1/5, 3 lives, 0 score, and READY shield', () => {
   const hud = createInitialHudSnapshot();
   assert.equal(hud.lives, 3);
   assert.equal(hud.maxLives, 3);
   assert.equal(hud.stage, 1);
   assert.equal(hud.maxStages, 5);
+  assert.equal(hud.score, 0);
   assert.equal(hud.shieldStatus, 'READY');
   assert.equal(hud.shieldTimeRemaining, 0);
 });
@@ -503,4 +509,114 @@ test('Final Boss alternates between spread (5-bullet fan) and charge phases, tak
   );
   assert.equal(boss.hp, 0);
   assert.equal(killOutcome.bossDefeated, true);
+  assert.equal(killOutcome.scoreEarned, SCORE_BOSS);
+});
+
+test('resolveCombatCollisions awards 10 for rushers, 15 for blasters, 20 for drones, and 500 for boss', () => {
+  assert.equal(SCORE_RUSHER, 10);
+  assert.equal(SCORE_BLASTER, 15);
+  assert.equal(SCORE_DRONE, 20);
+  assert.equal(SCORE_BOSS, 500);
+  assert.equal(getScoreForEnemyKind('rusher'), 10);
+  assert.equal(getScoreForEnemyKind('blaster'), 15);
+  assert.equal(getScoreForEnemyKind('drone'), 20);
+
+  const player = createInitialPlayerState(1000, 800);
+  player.x = 500;
+  player.y = 650;
+
+  const enemies: Enemy[] = [
+    {
+      id: 1,
+      kind: 'rusher',
+      x: 200,
+      y: 200,
+      radius: 20,
+      speed: 150,
+      angle: 0,
+      wobblePhase: 0,
+      fireTimer: 99,
+      strafeDir: 1,
+    },
+    {
+      id: 2,
+      kind: 'blaster',
+      x: 350,
+      y: 200,
+      radius: 22,
+      speed: 120,
+      angle: 0,
+      wobblePhase: 0,
+      fireTimer: 2,
+      strafeDir: 1,
+    },
+    {
+      id: 3,
+      kind: 'drone',
+      x: 500,
+      y: 200,
+      radius: 20,
+      speed: 170,
+      angle: 0,
+      wobblePhase: 0,
+      fireTimer: 2,
+      strafeDir: 1,
+    },
+  ];
+  const projectiles: Projectile[] = [
+    { x: 200, y: 200, vx: 0, vy: 0, radius: 6, angle: 0 },
+    { x: 350, y: 200, vx: 0, vy: 0, radius: 6, angle: 0 },
+    { x: 500, y: 200, vx: 0, vy: 0, radius: 6, angle: 0 },
+  ];
+
+  const shotOutcome = resolveCombatCollisions(player, projectiles, enemies, []);
+  assert.equal(shotOutcome.enemiesDestroyed, 3);
+  assert.equal(shotOutcome.scoreEarned, 45);
+
+  // Shield kill also awards points; unshielded contact damage awards 0 points
+  activateShield(player);
+  const shieldOutcome = resolveCombatCollisions(
+    player,
+    [],
+    [
+      {
+        id: 4,
+        kind: 'drone',
+        x: player.x,
+        y: player.y,
+        radius: 20,
+        speed: 170,
+        angle: 0,
+        wobblePhase: 0,
+        fireTimer: 2,
+        strafeDir: 1,
+      },
+    ],
+    []
+  );
+  assert.equal(shieldOutcome.scoreEarned, 20);
+
+  player.shieldTimer = 0;
+  player.invulnTimer = 0;
+  const hitOutcome = resolveCombatCollisions(
+    player,
+    [],
+    [
+      {
+        id: 5,
+        kind: 'rusher',
+        x: player.x,
+        y: player.y,
+        radius: 20,
+        speed: 150,
+        angle: 0,
+        wobblePhase: 0,
+        fireTimer: 99,
+        strafeDir: 1,
+      },
+    ],
+    []
+  );
+  assert.equal(hitOutcome.playerHit, true);
+  assert.equal(hitOutcome.scoreEarned, 0);
 });

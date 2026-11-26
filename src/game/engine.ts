@@ -65,6 +65,11 @@ export const ENEMY_PROJECTILE_RADIUS = 6;
 export const PLAYER_INVULN_SEC = 1.4;
 export const STAGE_CLEAR_BANNER_SEC = 1.8;
 
+export const SCORE_RUSHER = 10;
+export const SCORE_BLASTER = 15;
+export const SCORE_DRONE = 20;
+export const SCORE_BOSS = 500;
+
 export interface StageComposition {
   rushers: number;
   blasters: number;
@@ -103,6 +108,7 @@ export function createInitialHudSnapshot(initialStage = 1): GameHudSnapshot {
     maxLives: DEFAULT_LIVES,
     stage: safeStage,
     maxStages: TOTAL_STAGES,
+    score: 0,
     shieldStatus: 'READY',
     shieldTimeRemaining: 0,
   };
@@ -614,8 +620,21 @@ export function stepEnemyProjectiles(
   }
 }
 
+export function getScoreForEnemyKind(kind: EnemyKind): number {
+  switch (kind) {
+    case 'blaster':
+      return SCORE_BLASTER;
+    case 'drone':
+      return SCORE_DRONE;
+    case 'rusher':
+    default:
+      return SCORE_RUSHER;
+  }
+}
+
 export interface CollisionOutcome {
   enemiesDestroyed: number;
+  scoreEarned: number;
   playerHit: boolean;
   bossDefeated: boolean;
   gameOver: boolean;
@@ -630,6 +649,7 @@ export function resolveCombatCollisions(
   boss: BossEnemy | null = null
 ): CollisionOutcome {
   let enemiesDestroyed = 0;
+  let scoreEarned = 0;
   let playerHit = false;
   let bossDefeated = false;
 
@@ -648,6 +668,7 @@ export function resolveCombatCollisions(
         projectiles.splice(pi, 1);
         enemies.splice(ei, 1);
         enemiesDestroyed += 1;
+        scoreEarned += getScoreForEnemyKind(enemy.kind);
         destroyed = true;
         const popColor =
           enemy.kind === 'blaster'
@@ -673,6 +694,7 @@ export function resolveCombatCollisions(
       if (player.shieldTimer > 0) {
         enemies.splice(ei, 1);
         enemiesDestroyed += 1;
+        scoreEarned += getScoreForEnemyKind(enemy.kind);
         onPopEffect?.(enemy.x, enemy.y, '#38BDF8');
       } else if (player.invulnTimer <= 0) {
         player.lives = Math.max(0, player.lives - 1);
@@ -701,6 +723,7 @@ export function resolveCombatCollisions(
         if (boss.hp <= 0) {
           bossDefeated = true;
           enemiesDestroyed += 1;
+          scoreEarned += SCORE_BOSS;
           onPopEffect?.(boss.x, boss.y, '#FACC15');
           break;
         }
@@ -746,6 +769,7 @@ export function resolveCombatCollisions(
 
   return {
     enemiesDestroyed,
+    scoreEarned,
     playerHit,
     bossDefeated,
     gameOver: player.lives <= 0,
